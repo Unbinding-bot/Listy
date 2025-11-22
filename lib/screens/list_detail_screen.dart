@@ -205,26 +205,23 @@ class _ListDetailScreenState extends State<ListDetailScreen> {
 
  // --- UI Builders ---
 
- // FIX: Explicitly set return type to AppBar (which implements PreferredSizeWidget)
- AppBar _buildNormalAppBar() {
-  return AppBar(
-   title: Text(widget.listName),
-   actions: [
-    IconButton(
-     icon: const Icon(Icons.brush),
-     onPressed: () {
-      Navigator.push(context, MaterialPageRoute(builder: (_) => const DrawingScreen()));
-     },
-    ),
-    IconButton(
-     icon: const Icon(Icons.person_add),
-     onPressed: () {
-      // TODO: Implement sharing/membership management
-     },
-    ),
-   ],
-  );
- }
+ Widget _buildNormalAppBar() {
+    return AppBar(
+      title: Text(widget.listName),
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.brush),
+          onPressed: () {
+            Navigator.push(context, MaterialPageRoute(builder: (_) => const DrawingScreen()));
+          },
+        ),
+        IconButton(
+          icon: const Icon(Icons.people), // Updated icon
+          onPressed: _showMembersDialog, // New handler
+        ),
+      ],
+    );
+  }
 
  // FIX: Explicitly set return type to AppBar (which implements PreferredSizeWidget)
  AppBar _buildSelectionAppBar() {
@@ -530,25 +527,6 @@ class _ListDetailScreenState extends State<ListDetailScreen> {
       },
     );
   }
-
-  Widget _buildNormalAppBar() {
-    return AppBar(
-      title: Text(widget.listName),
-      actions: [
-        IconButton(
-          icon: const Icon(Icons.brush),
-          onPressed: () {
-            Navigator.push(context, MaterialPageRoute(builder: (_) => const DrawingScreen()));
-          },
-        ),
-        IconButton(
-          icon: const Icon(Icons.people), // Updated icon
-          onPressed: _showMembersDialog, // New handler
-        ),
-      ],
-    );
-  }
-
   // NEW: Dialog to view, add, and remove members
   void _showMembersDialog() {
     showDialog(
