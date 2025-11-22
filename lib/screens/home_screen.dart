@@ -68,7 +68,7 @@ class HomeScreen extends StatelessWidget {
           ),
         ],
       ),
-      FloatingActionButton(
+      floatingActionButton: FloatingActionButton(
         onPressed: () async {
             // 1. Show loading feedback (Optional, but good practice)
             ScaffoldMessenger.of(context).showSnackBar(
