@@ -51,23 +51,25 @@ class SettingsScreen extends StatelessWidget {
             ),
           ),
           
-          Wrap(
-            spacing: 8.0,
-            padding: const EdgeInsets.symmetric(horizontal: 16.0),
-            children: themeColors.map((color) {
-              bool isSelected = themeService.themeColor == color;
-              return GestureDetector(
-                onTap: () => themeService.setThemeColor(color),
-                child: CircleAvatar(
-                  backgroundColor: color,
-                  radius: isSelected ? 18 : 15,
-                  child: isSelected 
-                      ? const Icon(Icons.check, color: Colors.white) 
-                      : null,
-                ),
-              );
-            }).toList(),
-          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16.0), // Padding applied here
+            child: Wrap(
+              spacing: 8.0,
+              children: themeColors.map((color) {
+                bool isSelected = themeService.themeColor == color;
+                return GestureDetector(
+                  onTap: () => themeService.setThemeColor(color),
+                  child: CircleAvatar(
+                    backgroundColor: color,
+                    radius: isSelected ? 18 : 15,
+                    child: isSelected 
+                        ? const Icon(Icons.check, color: Colors.white) 
+                        : null,
+                  ),
+                );
+              }).toList(),
+            ),
+          )
           
           const Divider(),
           ListTile(

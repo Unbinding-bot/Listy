@@ -46,6 +46,13 @@ class SupabaseService {
     final listId = response['id'];
     return {'id': listId.toString(), 'name': listName};
   }
+  //delete
+  Future<void> deleteList(int listId) async {
+    // RLS policy handles security (only owner/member can delete)
+    await _client.from('lists')
+        .delete()
+        .eq('id', listId);
+  }
 
 
   // -------------------------------------------------------------------
@@ -99,7 +106,7 @@ class SupabaseService {
   await _client.from('items')
       .delete()
       .eq('id', itemId);
-
+  }
   // List Items Preview
   Future<List<Map<String, dynamic>>> getListItemsPreview(int listId) async {
   final data = await _client
@@ -111,4 +118,19 @@ class SupabaseService {
   
   return data as List<Map<String, dynamic>>;
   }
+  Future<void> bulkUpdateItemSortOrder(List<Map<String, dynamic>> items) async {
+    // The items list will contain {'id': itemId, 'sort_order': newSortOrder} objects.
+    await _client
+        .from('items')
+        .upsert(items); // upsert is efficient for bulk updates on primary keys
+  }
+  Stream<List<Map<String, dynamic>>> getItemsStream(int listId) {
+  return _client.from('items')
+      .stream(primaryKey: ['id'])
+      .eq('list_id', listId)
+      // IMPORTANT: Sort by sort_order first, then use created_at as a tie-breaker
+      .order('sort_order', ascending: true) 
+      .order('created_at', ascending: true)
+      .map((data) => data as List<Map<String, dynamic>>);
+}
 }

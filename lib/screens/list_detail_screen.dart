@@ -117,8 +117,8 @@ class _ListDetailScreenState extends State<ListDetailScreen> {
   }
 
   // --- Reordering Logic (Placeholder - requires 'sort_order' column in DB) ---
-  void _onReorder(int oldIndex, int newIndex) {
-    // This handles local reordering immediately for smooth UX
+  void _onReorder(int oldIndex, int newIndex) async { // <-- Make function async
+    // 1. Handle local reordering immediately for smooth UX
     setState(() {
       if (newIndex > oldIndex) {
         newIndex -= 1;
@@ -127,8 +127,28 @@ class _ListDetailScreenState extends State<ListDetailScreen> {
       _items.insert(newIndex, item);
     });
     
-    // TODO: 
-    // 1. Send bulk updates to Supabase to save the new 'sort_order' for all items involved.
+    // 2. Prepare the bulk update for Supabase
+    // We only need to update the sort_order column
+    final List<Map<String, dynamic>> updates = [];
+    for (int i = 0; i < _items.length; i++) {
+      updates.add({
+        'id': _items[i]['id'], 
+        'sort_order': i, // Use the current list index as the new sort_order
+      });
+    }
+    
+    // 3. Send bulk updates to Supabase
+    try {
+      await dbService.bulkUpdateItemSortOrder(updates);
+      // OPTIONAL: Show a message for success
+    } catch (e) {
+      // Handle the error if the update fails
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to save new order: $e')),
+        );
+      }
+    }
   }
 
 
