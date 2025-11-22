@@ -82,9 +82,24 @@ class MyApp extends StatelessWidget {
 
       
       // Check if user is already logged in
-      home: Supabase.instance.client.auth.currentUser == null
-          ? const AuthScreen()
-          : const HomeScreen(),
+      home: StreamBuilder<AuthState>(
+        stream: Supabase.instance.client.auth.onAuthStateChange, // Listen for auth events
+        builder: (context, snapshot) {
+          final session = snapshot.data?.session;
+          
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          
+          // Check for a valid session
+          if (session != null) {
+            return const HomeScreen();
+          }
+          
+          // No session found
+          return const AuthScreen();
+        },
+      ),
     );
   }
 }
