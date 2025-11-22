@@ -198,7 +198,7 @@ class SupabaseService {
   final profiles = await _client
       .from('profiles')
       .select('id, username')
-      .filter('id', memberUids.toList()); // Use the list of UIDs extracted above
+      .filter('id', 'in', memberUids.toList()); // Use the list of UIDs extracted above
 
   return (profiles as List).cast<Map<String, dynamic>>();
  }
