@@ -61,7 +61,7 @@ class SupabaseService {
         .eq('id', listId);
         // RLS policy should ensure only owners/members can perform this update
   }
-  
+
  //delete
  Future<void> deleteList(int listId) async {
   // RLS policy handles security (only owner/member can delete)
@@ -187,7 +187,7 @@ class SupabaseService {
   // Selects list_members data and joins with user details ('users!inner(id, user_metadata)')
   final data = await _client
     .from('list_members')
-    .select('role, added_at, user_id, users:user_id!inner(user_metadata, email)')
+    .select('role, user_id, profiles(username)')
     .eq('list_id', listId);
 
   return data as List<Map<String, dynamic>>;
