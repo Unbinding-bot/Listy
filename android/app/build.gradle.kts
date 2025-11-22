@@ -28,10 +28,10 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
-        manifestPlaceholders += [
-        'supa_scheme': 'com.listy', // Must match the scheme used in Supabase Redirect URLs
-        'supa_host': 'login-callback',
-    ]
+        manifestPlaceholders += mapOf(
+            "supa_scheme" to "com.listy", // Use "key" to "value" syntax
+            "supa_host" to "login-callback"
+        )
     }
 
     buildTypes {
