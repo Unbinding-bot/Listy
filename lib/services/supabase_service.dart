@@ -177,20 +177,30 @@ class SupabaseService {
   });
  }
 
- /// Fetches all members for a specific list, joining with user data.
- Future<List<Map<String, dynamic>>> getListMembers(int listId) async {
-  final currentUserId = currentUser?.id;
-  if (currentUserId == null) {
-   throw Exception('User not logged in.');
-  }
-  
-  // Selects list_members data and joins with user details ('users!inner(id, user_metadata)')
-  final data = await _client
-    .from('list_members')
-    .select('role, user_id, profiles(username)')
-    .eq('list_id', listId);
+ Future<List<Map<String, dynamic>>> getListMembersWithProfiles(int listId) async {
+  // 1. Get all user_ids associated with the list from list_members table
+  final memberIdsResponse = await _client
+      .from('list_members')
+      .select('user_id')
+      .eq('list_id', listId);
 
-  return data as List<Map<String, dynamic>>;
+  // Extract the raw list of UUIDs
+  final memberUids = (memberIdsResponse as List)
+      .map((row) => row['user_id'] as String)
+      .toList();
+
+  if (memberUids.isEmpty) {
+    return [];
+  }
+
+  // 2. Now fetch the profile data for those specific UIDs
+  // This is a direct query on the profiles table, which works reliably.
+  final profiles = await _client
+      .from('profiles')
+      .select('id, username')
+      .in_('id', memberUids); // Use the list of UIDs extracted above
+
+  return (profiles as List).cast<Map<String, dynamic>>();
  }
 
  /// Removes a member from a list.
