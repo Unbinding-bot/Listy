@@ -1,11 +1,24 @@
-// lib/screens/list_detail_screen.dart
-
 import 'package:flutter/material.dart';
 import '../services/supabase_service.dart';
+
+// --- Placeholder for complex features ---
+// We will define these later as they require new models and state management
+class DrawingScreen extends StatelessWidget {
+  const DrawingScreen({super.key});
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text("Drawing Tools")),
+      body: const Center(child: Text("Drawing Canvas and Tools Go Here")),
+    );
+  }
+}
+// ----------------------------------------
 
 class ListDetailScreen extends StatefulWidget {
   final String listId;
   final String listName;
+
   const ListDetailScreen({super.key, required this.listId, required this.listName});
 
   @override
@@ -13,184 +26,202 @@ class ListDetailScreen extends StatefulWidget {
 }
 
 class _ListDetailScreenState extends State<ListDetailScreen> {
-  final _dbService = SupabaseService();
-  late TextEditingController _titleController;
-  final TextEditingController _newItemController = TextEditingController();
-
-  // Function to show the share dialog
-  void _showShareDialog() {
-    String username = '';
-    showDialog(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: const Text("Share List"),
-          content: TextField(
-            onChanged: (value) => username = value,
-            decoration: const InputDecoration(hintText: "Enter username to share with"),
-          ),
-          actions: <Widget>[
-            TextButton(
-              child: const Text("Cancel"),
-              onPressed: () => Navigator.of(context).pop(),
-            ),
-            ElevatedButton(
-              child: const Text("Share"),
-              onPressed: () {
-                Navigator.of(context).pop();
-                _shareListWithUser(username.trim());
-              },
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  // Function to handle the actual sharing logic
-  void _shareListWithUser(String username) async {
-    if (username.isEmpty) return;
-    
-    // Show a temporary snackbar while sharing
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Sharing with $username...')),
-    );
-
-    try {
-      final userId = await _dbService.findUserIdByUsername(username);
-
-      if (userId == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('User not found or profile missing.')),
-        );
-        return;
-      }
-
-      await _dbService.shareList(widget.listId, userId);
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('List shared successfully with $username!')),
-      );
-
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to share: $e')),
-      );
-    }
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    _titleController = TextEditingController(text: widget.listName);
-  }
+  final dbService = SupabaseService();
+  final TextEditingController _addItemController = TextEditingController();
+  final FocusNode _addItemFocusNode = FocusNode();
+  
+  // State for the bottom options bar (just an example for font size)
+  double _currentFontSize = 16.0;
 
   @override
   void dispose() {
-    // Update title when leaving the screen
-    if (_titleController.text != widget.listName) {
-      _dbService.updateListTitle(widget.listId, _titleController.text);
-    }
-    _titleController.dispose();
-    _newItemController.dispose();
+    _addItemController.dispose();
+    _addItemFocusNode.dispose();
     super.dispose();
+  }
+
+  // Helper function to add a new item and focus the input
+  void _addNewItem(String title) async {
+    if (title.trim().isEmpty) return;
+    
+    // We assume the service has an addItem function that takes listId and title
+    await dbService.addItem(int.parse(widget.listId), title.trim());
+    
+    _addItemController.clear();
+    _addItemFocusNode.requestFocus(); // Keep focus for rapid entry
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        elevation: 0,
-        backgroundColor: Colors.transparent,
-        iconTheme: const IconThemeData(color: Colors.black),
+        title: Text(widget.listName),
         actions: [
-          // FIX: Implement the onPressed logic
+          // Placeholder for the Drawing Tool Button
           IconButton(
-            icon: const Icon(Icons.person_add), 
-            onPressed: _showShareDialog
-          )
+            icon: const Icon(Icons.brush),
+            onPressed: () {
+              Navigator.push(context, MaterialPageRoute(builder: (_) => const DrawingScreen()));
+            },
+          ),
+          // Placeholder for Sharing/Membership
+          IconButton(
+            icon: const Icon(Icons.person_add),
+            onPressed: () {
+              // TODO: Implement sharing/membership management
+            },
+          ),
         ],
       ),
+      
       body: Column(
         children: [
-          // 1. Title Area (Editable)
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0),
-            child: TextField(
-              controller: _titleController,
-              style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-              decoration: const InputDecoration(
-                border: InputBorder.none,
-                hintText: "Title",
-              ),
-              onSubmitted: (val) => _dbService.updateListTitle(widget.listId, val),
-            ),
-          ),
-          
-          // 2. List Items Area
+          // 1. The main list of items (StreamBuilder)
           Expanded(
             child: StreamBuilder<List<Map<String, dynamic>>>(
-              stream: _dbService.getListItems(widget.listId),
+              // Assuming SupabaseService has a getItemsStream function
+              stream: dbService.getItemsStream(int.parse(widget.listId)),
               builder: (context, snapshot) {
-                // RENDER FIX: Show loading while waiting for data
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                    return const Center(child: CircularProgressIndicator());
+                if (!snapshot.hasData) {
+                  return const Center(child: CircularProgressIndicator());
                 }
-
-                if (snapshot.hasError) {
-                    return Center(child: Text('Error loading items: ${snapshot.error}'));
-                }
-
-                // FIX: Fallback to an empty list instead of a blank SizedBox
-                final tasks = snapshot.data ?? [];
+                final items = snapshot.data!;
 
                 return ListView.builder(
-                  itemCount: tasks.length + 1, // +1 for the "Add Item" row
+                  itemCount: items.length,
                   itemBuilder: (context, index) {
-                    // The last item is the "Add new" input row
-                    if (index == tasks.length) {
-                      return ListTile(
-                        leading: const Icon(Icons.add),
-                        title: TextField(
-                          controller: _newItemController,
-                          decoration: const InputDecoration(
-                            hintText: "List item",
-                            border: InputBorder.none,
+                    final item = items[index];
+                    final itemId = item['id'] as int;
+                    final isCompleted = item['is_completed'] as bool;
+                    
+                    // The core item structure with split interaction zones
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4.0),
+                      child: Row(
+                        children: [
+                          // LEFT SIDE: Checkbox Toggling Zone
+                          GestureDetector(
+                            onTap: () async {
+                              await dbService.updateItem(
+                                itemId, 
+                                {'is_completed': !isCompleted},
+                              );
+                            },
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                              child: Icon(
+                                isCompleted ? Icons.check_box : Icons.check_box_outline_blank,
+                                color: isCompleted ? Theme.of(context).colorScheme.primary : Colors.grey,
+                              ),
+                            ),
                           ),
-                          onSubmitted: (val) {
-                            if (val.isNotEmpty) {
-                              _dbService.addTask(widget.listId, val);
-                              _newItemController.clear();
-                              // Request focus to close the keyboard after submitting
-                              FocusScope.of(context).requestFocus(FocusNode());
-                            }
-                          },
-                        ),
-                      );
-                    }
 
-                    // Actual Tasks
-                    final task = tasks[index];
-                    return CheckboxListTile(
-                      controlAffinity: ListTileControlAffinity.leading,
-                      value: task['is_completed'],
-                      title: Text(
-                        task['title'],
-                        style: TextStyle(
-                          decoration: task['is_completed'] ? TextDecoration.lineThrough : null,
-                          color: task['is_completed'] ? Colors.grey : Colors.black,
-                        ),
+                          // RIGHT SIDE: Editable Text Field Zone
+                          Expanded(
+                            child: TextFormField(
+                              initialValue: item['title'] as String,
+                              keyboardType: TextInputType.text, // For regular text
+                              style: TextStyle(
+                                fontSize: _currentFontSize, // Dynamic Font Size
+                                decoration: isCompleted ? TextDecoration.lineThrough : null,
+                                color: isCompleted ? Colors.grey : Colors.black,
+                                // TODO: Apply other dynamic styles (bold, italic, font color) here
+                              ),
+                              decoration: const InputDecoration(
+                                border: InputBorder.none,
+                                contentPadding: EdgeInsets.zero,
+                              ),
+                              // On submit (e.g., when focus leaves or "Done" is pressed)
+                              onFieldSubmitted: (newTitle) async {
+                                await dbService.updateItem(
+                                  itemId, 
+                                  {'title': newTitle},
+                                );
+                              },
+                            ),
+                          ),
+                        ],
                       ),
-                      onChanged: (val) {
-                        _dbService.toggleTask(task['id'].toString(), task['is_completed']);
-                      },
                     );
                   },
                 );
               },
             ),
           ),
+          
+          // 2. Add New Item Input Field
+          Padding(
+            padding: const EdgeInsets.all(8.0),
+            child: TextField(
+              controller: _addItemController,
+              focusNode: _addItemFocusNode,
+              decoration: InputDecoration(
+                hintText: "New item...",
+                suffixIcon: IconButton(
+                  icon: const Icon(Icons.add),
+                  onPressed: () => _addNewItem(_addItemController.text),
+                ),
+                border: const OutlineInputBorder(),
+              ),
+              // Use the keyboard's "New Line" button to create a new item
+              onSubmitted: (value) {
+                _addNewItem(value);
+              },
+            ),
+          ),
         ],
+      ),
+      
+      // 3. Bottom Options Bar for Styling/Tools
+      bottomNavigationBar: BottomAppBar(
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceAround,
+          children: <Widget>[
+            // Font Size Increase Button
+            IconButton(
+              icon: const Icon(Icons.format_size),
+              onPressed: () {
+                setState(() {
+                  _currentFontSize = _currentFontSize == 16.0 ? 20.0 : 16.0; // Toggle example
+                  // TODO: More complex implementation with a slider/dialog
+                });
+              },
+              tooltip: 'Increase Font Size',
+            ),
+            // Bold Button
+            IconButton(
+              icon: const Icon(Icons.format_bold),
+              onPressed: () {
+                // TODO: Implement bold style update
+              },
+              tooltip: 'Bold',
+            ),
+            // Italic Button
+            IconButton(
+              icon: const Icon(Icons.format_italic),
+              onPressed: () {
+                // TODO: Implement italic style update
+              },
+              tooltip: 'Italicize',
+            ),
+            // Color Picker/Palette Button
+            IconButton(
+              icon: const Icon(Icons.color_lens),
+              onPressed: () {
+                // TODO: Implement color picker dialog (Hex input, presets)
+              },
+              tooltip: 'Change Font Color/Highlight',
+            ),
+            // Disable Checkboxes Button
+            IconButton(
+              icon: const Icon(Icons.check_box_outline_blank),
+              onPressed: () {
+                // TODO: Implement logic to toggle checkbox visibility/functionality
+              },
+              tooltip: 'Toggle Checkboxes',
+            ),
+          ],
+        ),
       ),
     );
   }

@@ -95,4 +95,11 @@ class SupabaseService {
         return null;
     }
   }
+  Future<void> deleteList(int listId) async {
+    // RLS (Row Level Security) will ensure only the owner can delete this.
+    await _client
+        .from('lists')
+        .delete()
+        .eq('id', listId);
+  }
 }
