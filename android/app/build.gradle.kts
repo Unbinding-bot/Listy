@@ -42,3 +42,13 @@ android {
 flutter {
     source = "../.."
 }
+configurations.all {
+    resolutionStrategy {
+        // Force the older stable version of browser
+        force 'androidx.browser:browser:1.8.0'
+        
+        // Force the older stable version of core libraries
+        force 'androidx.core:core:1.15.0'
+        force 'androidx.core:core-ktx:1.15.0'
+    }
+}
