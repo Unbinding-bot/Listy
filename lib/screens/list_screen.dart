@@ -1,41 +1,38 @@
 // lib/screens/list_screen.dart
 import 'package:flutter/material.dart';
-import '../services/database_service.dart'; // Note the relative import
+import '../services/supabase_service.dart';
 
 class SharedListsScreen extends StatelessWidget {
   const SharedListsScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
-    final dbService = DatabaseService();
+    final dbService = SupabaseService();
 
     return Scaffold(
-      appBar: AppBar(title: const Text("My Shared Lists")),
-      body: StreamBuilder(
+      appBar: AppBar(title: const Text("Supabase Lists")),
+      body: StreamBuilder<List<Map<String, dynamic>>>(
         stream: dbService.getMyLists(),
         builder: (context, snapshot) {
-          if (snapshot.hasError) return const Center(child: Text("Error loading lists"));
-          if (snapshot.connectionState == ConnectionState.waiting) {
-             return const Center(child: CircularProgressIndicator());
-          }
-          
-          var docs = snapshot.data!.docs;
-          
-          if (docs.isEmpty) return const Center(child: Text("No lists yet"));
+          if (snapshot.hasError) return Center(child: Text("Error: ${snapshot.error}"));
+          if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+
+          final lists = snapshot.data!;
+
+          if (lists.isEmpty) return const Center(child: Text("No lists yet"));
 
           return ListView.builder(
-            itemCount: docs.length,
+            itemCount: lists.length,
             itemBuilder: (context, index) {
-              var data = docs[index].data() as Map<String, dynamic>;
-              String listId = docs[index].id;
-
+              final list = lists[index];
               return ListTile(
-                title: Text(data['name']),
-                subtitle: Text("Shared with ${data['members'].length} people"),
+                title: Text(list['name']),
                 onTap: () {
                   Navigator.push(
-                    context, 
-                    MaterialPageRoute(builder: (_) => ItemsScreen(listId: listId))
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => ItemsScreen(listId: list['id'].toString()),
+                    ),
                   );
                 },
               );
@@ -57,26 +54,25 @@ class ItemsScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final dbService = DatabaseService();
+    final dbService = SupabaseService();
 
     return Scaffold(
       appBar: AppBar(title: const Text("Items")),
-      body: StreamBuilder(
+      body: StreamBuilder<List<Map<String, dynamic>>>(
         stream: dbService.getListItems(listId),
         builder: (context, snapshot) {
           if (!snapshot.hasData) return const SizedBox();
-          var tasks = snapshot.data!.docs;
+          final tasks = snapshot.data!;
 
           return ListView.builder(
             itemCount: tasks.length,
             itemBuilder: (context, index) {
-              var task = tasks[index].data() as Map<String, dynamic>;
-              
+              final task = tasks[index];
               return CheckboxListTile(
-                title: Text(task['name']),
-                value: task['completed'],
+                title: Text(task['title']),
+                value: task['is_completed'],
                 onChanged: (val) {
-                  dbService.toggleTask(listId, tasks[index].id, task['completed']);
+                  dbService.toggleTask(task['id'].toString(), task['is_completed']);
                 },
               );
             },
@@ -85,7 +81,7 @@ class ItemsScreen extends StatelessWidget {
       ),
       floatingActionButton: FloatingActionButton(
         child: const Icon(Icons.add_task),
-        onPressed: () => dbService.addTask(listId, "New Task"),
+        onPressed: () => dbService.addTask(listId, "Buy Milk"),
       ),
     );
   }
