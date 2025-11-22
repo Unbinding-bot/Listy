@@ -42,8 +42,10 @@ android {
 flutter {
     source = "../.."
 }
+
 configurations.all {
-    resolutionStrategy 
+    resolutionStrategy {
+        // Force the older stable version of browser
         force("androidx.browser:browser:1.8.0")
         
         // Force the older stable version of core libraries
