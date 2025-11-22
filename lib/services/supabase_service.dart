@@ -70,6 +70,8 @@ class SupabaseService {
     .eq('id', listId);
  }
 
+ 
+
 
  // -------------------------------------------------------------------
  // ITEMS MANAGEMENT
@@ -149,32 +151,33 @@ class SupabaseService {
  // SHARING/MEMBERSHIP MANAGEMENT
  // -------------------------------------------------------------------
 
+ // -------------------------------------------------------------------
+ // SHARING/MEMBERSHIP MANAGEMENT
+ // -------------------------------------------------------------------
+
+ /// Finds user by email and adds them as a list member using an RPC (Required due to RLS).
  Future<void> addListMember(int listId, String memberEmail) async {
   final currentUserId = currentUser?.id;
   if (currentUserId == null) {
    throw Exception('User not logged in.');
   }
-
-  // 1. Find the target user's ID by their email
-  final users = await _client
-    .from('users')
-    .select('id')
-    .eq('email', memberEmail)
-    .limit(1);
-
-  if (users.isEmpty) {
-   throw Exception('User with email $memberEmail not found.');
+  
+  // 🔑 FIX: Use RPC to safely find the user by email and insert the member record.
+  // The SQL function handles the lookup in auth.users and the insertion into list_members.
+  final response = await _client.rpc(
+   'add_member_by_email_and_list', // NEW SQL FUNCTION NAME
+   params: {
+    'list_id_in': listId,
+    'member_email_in': memberEmail,
+    'added_by_id_in': currentUserId,
+   },
+  );
+  
+  // Check the response from the SQL function for errors
+  if (response is String && response == 'user_not_found') {
+    throw Exception('User with email $memberEmail not found.');
   }
 
-  final memberId = users.first['id'] as String;
-
-  // 2. Insert the new membership record
-  await _client.from('list_members').upsert({
-   'list_id': listId,
-   'user_id': memberId,
-   'role': 'member', 
-   'added_by': currentUserId,
-  });
  }
 
  Future<List<Map<String, dynamic>>> getListMembersWithProfiles(int listId) async {
@@ -194,11 +197,10 @@ class SupabaseService {
   }
 
   // 2. Now fetch the profile data for those specific UIDs
-  // This is a direct query on the profiles table, which works reliably.
   final profiles = await _client
       .from('profiles')
       .select('id, username')
-      .filter('id', 'in', memberUids.toList()); // Use the list of UIDs extracted above
+      .in_('id', memberUids); // Use the list of UIDs extracted above
 
   return (profiles as List).cast<Map<String, dynamic>>();
  }
@@ -221,21 +223,22 @@ class SupabaseService {
  Future<void> transferOwnership(int listId, String newOwnerId) async {
   final currentUserId = currentUser?.id;
   if (currentUserId == null) {
-   throw Exception('User not logged in.');
+    throw Exception('User not logged in.');
   }
   
-  // Update the new owner's role to 'owner'
+  // 1. Demote the current owner to a regular 'member'
   await _client
-   .from('list_members')
-   .update({'role': 'owner'})
-   .eq('list_id', listId)
-   .eq('user_id', newOwnerId);
+    .from('list_members')
+    .update({'role': 'owner'}) 
+    .eq('list_id', listId)
+    .eq('user_id', currentUserId)
+    .eq('role', 'owner'); // Ensure we only demote if they were an owner
 
-  // Demote the current user to a regular 'member' (if they were the previous owner)
+  // 2. Promote the new user to 'owner'
   await _client
-   .from('list_members')
-   .update({'role': 'owner'})
-   .eq('list_id', listId)
-   .eq('user_id', currentUserId);
+    .from('list_members')
+    .update({'role': 'owner'})
+    .eq('list_id', listId)
+    .eq('user_id', newOwnerId);
  }
 }
