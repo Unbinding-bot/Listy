@@ -133,10 +133,17 @@ class _ListDetailScreenState extends State<ListDetailScreen> {
                               ),
                               // On submit (e.g., when focus leaves or "Done" is pressed)
                               onFieldSubmitted: (newTitle) async {
-                                await dbService.updateItem(
-                                  itemId, 
-                                  {'title': newTitle},
-                                );
+                                final trimmedTitle = newTitle.trim();
+                                if (trimmedTitle.isEmpty) {
+                                  // 1. Delete the item if the title is empty
+                                  await dbService.deleteItem(itemId);
+                                } else {
+                                  // 2. Update the item if the title is not empty
+                                  await dbService.updateItem(
+                                    itemId, 
+                                    {'title': trimmedTitle},
+                                  );
+                                }
                               },
                             ),
                           ),

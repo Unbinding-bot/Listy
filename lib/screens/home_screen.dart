@@ -136,15 +136,39 @@ class HomeScreen extends StatelessWidget {
                                     const SizedBox(height: 8),
 
                                     // Item Preview Placeholder (To be updated with actual item data)
-                                    const Expanded(
-                                      child: Opacity(
-                                        opacity: 0.7,
-                                        child: Text(
-                                          'Items: Buy milk, Pay bills, Call mom, Exercise...',
-                                          style: TextStyle(fontSize: 14),
-                                          maxLines: 3, 
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
+                                    // Item Preview Section (Fetches real data)
+                                    Expanded(
+                                      child: FutureBuilder<List<Map<String, dynamic>>>(
+                                        future: dbService.getListItemsPreview(listId),
+                                        builder: (context, itemSnapshot) {
+                                          if (!itemSnapshot.hasData) {
+                                            return const SizedBox(); // Show nothing while loading
+                                          }
+                  
+                                          final previewItems = itemSnapshot.data!;
+                  
+                                          // 1. Build the preview text
+                                          final previewText = previewItems
+                                              .map((item) => item['title'].toString())
+                                              .join(', ');
+                  
+                                          // 2. Hide the card if the title is empty AND no items exist
+                                          if (listName.isEmpty && previewItems.isEmpty) {
+                                              return const SizedBox.shrink(); 
+                                              // Note: This relies on the StreamBuilder re-emitting a filtered list 
+                                              // when the title becomes empty. For now, it filters the preview content.
+                                          }
+                  
+                                          return Opacity(
+                                            opacity: 0.7,
+                                            child: Text(
+                                              previewText.isNotEmpty ? previewText : 'Empty List', // Show 'Empty List' if no items
+                                              style: const TextStyle(fontSize: 14),
+                                              maxLines: 3, 
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          );
+                                        },
                                       ),
                                     ),
                                   ],
@@ -171,10 +195,22 @@ class HomeScreen extends StatelessWidget {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Creating new list...')),
           );
-
           try {
-            // Call the RPC function via the service
-            await dbService.createNewList("Untitled List");
+            // Await the RPC call, which now returns the new list's data
+            final newList = await dbService.createNewList("Untitled List");
+            
+            // Navigate instantly to the new list detail screen
+            if (context.mounted) {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => ListDetailScreen(
+                    listId: newList['id'], 
+                    listName: newList['name']
+                  ),
+                ),
+              );
+            }
             
             // Show success feedback
             ScaffoldMessenger.of(context).showSnackBar(

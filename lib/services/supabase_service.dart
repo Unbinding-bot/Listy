@@ -28,27 +28,23 @@ class SupabaseService {
   }
 
   // RPC to safely create a list and add the creator as a member (Fixes RLS recursion)
-  Future<void> createNewList(String listName) async {
+  Future<Map<String, dynamic>> createNewList(String listName) async {
     final currentUserId = currentUser?.id;
     if (currentUserId == null) {
       throw Exception('User not logged in.');
     }
 
     // Calls the 'create_list_and_add_member' SQL function
-    await _client.rpc(
+    final response = await _client.rpc(
       'create_list_and_add_member',
       params: {
         'list_name': listName,
       },
     );
-  }
 
-  // Function to delete a list (RLS ensures only owner can do this)
-  Future<void> deleteList(int listId) async {
-    await _client
-        .from('lists')
-        .delete()
-        .eq('id', listId);
+    // The RPC function returns a single JSON object (e.g., {'id': 1234})
+    final listId = response['id'];
+    return {'id': listId.toString(), 'name': listName};
   }
 
 
@@ -92,5 +88,27 @@ class SupabaseService {
     await _client.from('items')
         .update(updates)
         .eq('id', itemId);
+  }
+  Future<void> deleteItem(int itemId) async {
+  final currentUserId = currentUser?.id;
+  if (currentUserId == null) {
+    throw Exception('User not logged in.');
+  }
+
+  // RLS policy "Members can modify and view items" handles security
+  await _client.from('items')
+      .delete()
+      .eq('id', itemId);
+
+  // List Items Preview
+  Future<List<Map<String, dynamic>>> getListItemsPreview(int listId) async {
+  final data = await _client
+      .from('items')
+      .select('title')
+      .eq('list_id', listId)
+      .limit(3) // Get the top 3 items
+      .order('created_at', ascending: true);
+  
+  return data as List<Map<String, dynamic>>;
   }
 }
