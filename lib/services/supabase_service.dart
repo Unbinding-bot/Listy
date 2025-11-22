@@ -11,18 +11,14 @@ class SupabaseService {
   Future<void> createNewList(String listName) async {
     if (currentUserId == null) return;
 
-    // Step 1: Create List and get the new ID
-    final listData = await _client
-        .from('lists')
-        .insert({'name': listName, 'owner_id': currentUserId})
-        .select()
-        .single();
-
-    // Step 2: Add self as a member
-    await _client.from('list_members').insert({
-      'list_id': listData['id'],
-      'user_id': currentUserId,
-    });
+    // Use the Remote Procedure Call (RPC) instead of sequential inserts.
+    await _client.rpc(
+      'create_list_and_add_member', // Name of the SQL function we created
+      params: {
+        'list_name': listName, 
+        // The user ID is automatically grabbed by auth.uid() inside the SQL function.
+      },
+    );
   }
 
   // 2. SHARE A LIST
