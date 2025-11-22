@@ -24,22 +24,51 @@ class SettingsScreen extends StatelessWidget {
             title: Text(username),
             subtitle: Text(user?.email ?? ""),
           ),
+          // Dark Mode Toggle (NEW)
           ListTile(
-            leading: const Icon(Icons.palette),
-            title: const Text("Change Theme Color"),
-            trailing: Container(
-              width: 24,
-              height: 24,
-              decoration: BoxDecoration(
-                color: themeService.themeColor, // Show current color
-                shape: BoxShape.circle,
-              ),
+            title: const Text('Dark Mode'),
+            trailing: Switch(
+              value: themeService.isDarkMode,
+              onChanged: (newValue) {
+                themeService.toggleDarkMode(newValue);
+              },
             ),
+            leading: Icon(themeService.isDarkMode ? Icons.dark_mode : Icons.light_mode),
             onTap: () {
-              // Open a dialog for color selection
-              _showThemeDialog(context, themeService); 
+                // Tapping the ListTile toggles the state
+                themeService.toggleDarkMode(!themeService.isDarkMode);
             },
           ),
+          
+          const Divider(),
+
+          // Color Selection (Using your existing list)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+            child: Text(
+              'Accent Color', 
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+          ),
+          
+          Wrap(
+            spacing: 8.0,
+            padding: const EdgeInsets.symmetric(horizontal: 16.0),
+            children: themeColors.map((color) {
+              bool isSelected = themeService.themeColor == color;
+              return GestureDetector(
+                onTap: () => themeService.setThemeColor(color),
+                child: CircleAvatar(
+                  backgroundColor: color,
+                  radius: isSelected ? 18 : 15,
+                  child: isSelected 
+                      ? const Icon(Icons.check, color: Colors.white) 
+                      : null,
+                ),
+              );
+            }).toList(),
+          ),
+          
           const Divider(),
           ListTile(
             leading: const Icon(Icons.logout, color: Colors.red),

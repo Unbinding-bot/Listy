@@ -8,6 +8,34 @@ import 'screens/home_screen.dart';
 import 'services/theme_service.dart'; // Import the new service
 
 
+ThemeData createDarkTheme(Color primaryColor) {
+  return ThemeData(
+    brightness: Brightness.dark,
+    colorScheme: ColorScheme.dark(
+      primary: primaryColor,
+      // You can derive secondary/accent colors here, or use constants
+      secondary: primaryColor.withOpacity(0.7),
+      background: const Color(0xFF121212),
+      surface: const Color(0xFF1E1E1E),
+    ),
+    useMaterial3: true,
+  );
+}
+
+ThemeData createLightTheme(Color primaryColor) {
+  return ThemeData(
+    brightness: Brightness.light,
+    colorScheme: ColorScheme.light(
+      primary: primaryColor,
+      secondary: primaryColor.withOpacity(0.7),
+      background: Colors.white,
+      surface: Colors.white,
+    ),
+    useMaterial3: true,
+  );
+}
+
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -32,14 +60,27 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final themeService = Provider.of<ThemeService>(context);
+    // 1. Listen to changes in ThemeService (color AND dark mode)
+    // The Provider.of<T>(context) must be inside the build method.
+    final themeService = Provider.of<ThemeService>(context); 
     
+    // 2. Dynamically create themes based on the current themeColor
+    // These functions must be defined outside the class (as shown in the previous response)
+    final lightTheme = createLightTheme(themeService.themeColor);
+    final darkTheme = createDarkTheme(themeService.themeColor);
+
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        colorSchemeSeed: themeService.themeColor,
-      ),
+      title: 'Listy',
+      
+      // Assign the dynamically created themes
+      theme: lightTheme,
+      darkTheme: darkTheme,
+      
+      // Set the themeMode based on the isDarkMode state
+      themeMode: themeService.isDarkMode ? ThemeMode.dark : ThemeMode.light,
+
+      
       // Check if user is already logged in
       home: Supabase.instance.client.auth.currentUser == null
           ? const AuthScreen()
