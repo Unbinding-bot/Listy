@@ -518,7 +518,7 @@ class _ListDetailScreenState extends State<ListDetailScreen> {
             ElevatedButton(
               onPressed: () async {
                 Navigator.pop(context);
-                await _shareList(shareController.text);
+                await await _addMember(shareController.text);
               },
               child: const Text('Share'),
             ),
