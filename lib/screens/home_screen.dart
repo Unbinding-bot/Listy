@@ -68,10 +68,31 @@ class HomeScreen extends StatelessWidget {
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () => dbService.createNewList("Untitled List"),
+      FloatingActionButton(
+        onPressed: () async {
+            // 1. Show loading feedback (Optional, but good practice)
+            ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Creating new list...')),
+            );
+
+            try {
+                // 2. Await the async call to ensure it completes
+                await dbService.createNewList("Untitled List");
+      
+                // 3. Show success feedback
+                ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('List created successfully!')),
+                );
+        
+            } catch (e) {
+                // 4. Show error feedback, especially useful for debugging RLS failures
+                ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Error creating list: $e')),
+                );
+            }
+        },
         child: const Icon(Icons.add),
-      ),
+        ),
     );
   }
 }
