@@ -613,7 +613,7 @@ void _showMembersDialog() {
   content: SizedBox(
    width: double.maxFinite,
    child: FutureBuilder<List<Map<String, dynamic>>>(
-   future: dbService.getListMembers(int.parse(widget.listId)),
+   future: dbService.getListMembersWithProfiles(int.parse(widget.listId)),
    builder: (context, snapshot) {
     if (snapshot.connectionState == ConnectionState.waiting) {
     return const Center(child: CircularProgressIndicator());
