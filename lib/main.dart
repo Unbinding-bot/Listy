@@ -1,11 +1,15 @@
 // lib/main.dart
 import 'package:flutter/material.dart';
+import 'package:flutter_web_plugins/url_strategy.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'screens/auth_screen.dart';
 import 'screens/home_screen.dart';
 
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  
+  usePathUrlStrategy();
 
   await Supabase.initialize(
     url: 'https://qnlpuganyeijxsgravrx.supabase.co',
