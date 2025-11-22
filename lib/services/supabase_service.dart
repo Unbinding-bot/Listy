@@ -7,18 +7,16 @@ class SupabaseService {
   String? get currentUserId => _client.auth.currentUser?.id;
 
   // 1. CREATE A LIST
-  // We insert the list, then immediately insert a row into 'list_members'
-  Future<void> createNewList(String listName) async {
-    if (currentUserId == null) return;
+  Future<Map<String, dynamic>> createNewList(String listName) async { // <-- Now returns Map
+    if (currentUserId == null) throw Exception('User not logged in.');
 
-    // Use the Remote Procedure Call (RPC) instead of sequential inserts.
-    await _client.rpc(
-      'create_list_and_add_member', // Name of the SQL function we created
-      params: {
-        'list_name': listName, 
-        // The user ID is automatically grabbed by auth.uid() inside the SQL function.
-      },
+    final result = await _client.rpc(
+        'create_list_and_add_member',
+        params: {'list_name': listName},
     );
+  
+    // The RPC returns a single JSON object.
+    return result as Map<String, dynamic>; 
   }
 
   // 2. SHARE A LIST
