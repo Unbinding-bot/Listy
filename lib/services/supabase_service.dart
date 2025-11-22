@@ -46,6 +46,11 @@ class SupabaseService {
     // to only show lists we are members of.
   }
 
+  // 3.5 LIST NAME
+  Future<void> updateListTitle(String listId, String newTitle) async {
+    await _client.from('lists').update({'name': newTitle}).eq('id', listId);
+  }
+
   // 4. ADD ITEM
   Future<void> addTask(String listId, String taskName) async {
     await _client.from('items').insert({
