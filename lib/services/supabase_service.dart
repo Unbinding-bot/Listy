@@ -46,6 +46,22 @@ class SupabaseService {
   final listId = response['id'];
   return {'id': listId.toString(), 'name': listName};
  }
+
+ // NEW: Function to update list name
+  Future<void> updateListName(int listId, String newName) async {
+    final currentUserId = currentUser?.id;
+    if (currentUserId == null) {
+      throw Exception('User not logged in.');
+    }
+
+    await _client.from('lists')
+        .update({
+          'name': newName,
+        })
+        .eq('id', listId);
+        // RLS policy should ensure only owners/members can perform this update
+  }
+  
  //delete
  Future<void> deleteList(int listId) async {
   // RLS policy handles security (only owner/member can delete)

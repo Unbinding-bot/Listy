@@ -1,733 +1,829 @@
+// lib/screens/list_detail_screen.dart
+
 import 'package:flutter/material.dart';
 import '../services/supabase_service.dart';
 
 // --- Placeholder for complex features (Keep this) ---
 class DrawingScreen extends StatelessWidget {
- const DrawingScreen({super.key});
- @override
- Widget build(BuildContext context) {
-  return Scaffold(
-   appBar: AppBar(title: const Text("Drawing Tools")),
-   body: const Center(child: Text("Drawing Canvas and Tools Go Here")),
-  );
- }
+const DrawingScreen({super.key});
+@override
+Widget build(BuildContext context) {
+return Scaffold(
+appBar: AppBar(title: const Text("Drawing Tools")),
+body: const Center(child: Text("Drawing Canvas and Tools Go Here")),
+);
+}
 }
 // ----------------------------------------
 
 class ListDetailScreen extends StatefulWidget {
- final String listId;
- final String listName;
+final String listId;
+final String listName;
+// You might need a way to tell the parent (HomeScreen) that the name changed.
+// final Function(String newName)? onListNameUpdated; 
 
- const ListDetailScreen({super.key, required this.listId, required this.listName});
+const ListDetailScreen({super.key, required this.listId, required this.listName});
 
- @override
- State<ListDetailScreen> createState() => _ListDetailScreenState();
+@override
+State<ListDetailScreen> createState() => _ListDetailScreenState();
 }
 
 class _ListDetailScreenState extends State<ListDetailScreen> {
- final dbService = SupabaseService();
- final TextEditingController _addItemController = TextEditingController();
- final FocusNode _addItemFocusNode = FocusNode();
+final dbService = SupabaseService();
+final TextEditingController _addItemController = TextEditingController();
+final FocusNode _addItemFocusNode = FocusNode();
 
- // State for the item data (needed for ReorderableListView)
- List<Map<String, dynamic>> _items = [];
+// State for the item data (needed for ReorderableListView)
+List<Map<String, dynamic>> _items = [];
+
+// State for multi-selection
+final List<int> _selectedItemIds = [];
+bool get isSelecting => _selectedItemIds.isNotEmpty;
+
+// State for the bottom options bar (just an example for font size)
+double _currentFontSize = 16.0;
+
+// NEW: Formatting states for the SELECTED items (used for the bottom bar UI)
+bool _isBoldSelected = false;
+bool _isItalicSelected = false;
+
+// Local variable to allow the listName in the AppBar to change
+late String _localListName;
+
+// --- Initialization and Cleanup ---
+
+@override
+void initState() {
+super.initState();
+_localListName = widget.listName; // Initialize local name from widget
+// Start listening to the stream immediately
+dbService.getItemsStream(int.parse(widget.listId)).listen((data) {
+if (mounted) {
+ // Update the local list whenever Supabase emits new data
+ setState(() {
+ _items = data;
+ });
+}
+});
+}
+
+@override
+void dispose() {
+_addItemController.dispose();
+_addItemFocusNode.dispose();
+super.dispose();
+}
+
+// --- Selection Management ---
+
+void _updateFormattingBarState() {
+if (_selectedItemIds.isEmpty) {
+setState(() {
+ _isBoldSelected = false;
+ _isItalicSelected = false;
+});
+return;
+}
+
+// Get the items corresponding to selected IDs
+final selectedItems = _items.where((item) => _selectedItemIds.contains(item['id'])).toList();
+
+if (selectedItems.isEmpty) return;
+
+// Check if ALL selected items share the property (for UI state)
+final allBold = selectedItems.every((item) => item['is_bold'] == true);
+final allItalic = selectedItems.every((item) => item['is_italic'] == true);
+
+setState(() {
+_isBoldSelected = allBold;
+_isItalicSelected = allItalic;
+});
+}
+
+
+void _toggleSelection(int itemId) {
+setState(() {
+if (_selectedItemIds.contains(itemId)) {
+ _selectedItemIds.remove(itemId);
+} else {
+ _selectedItemIds.add(itemId);
+}
+_updateFormattingBarState();
+});
+}
+
+void _clearSelection() {
+setState(() {
+_selectedItemIds.clear();
+_updateFormattingBarState();
+});
+}
+
+// --- Core Action Methods ---
+
+void _addNewItem(String title) async {
+final trimmedTitle = title.trim();
+if (trimmedTitle.isEmpty) return;
+
+await dbService.addItem(int.parse(widget.listId), trimmedTitle);
+
+_addItemController.clear();
+_addItemFocusNode.requestFocus(); // Keep focus for rapid entry
+}
+
+Future<void> _deleteSelectedItems() async {
+final idsToDelete = List<int>.from(_selectedItemIds);
+_clearSelection(); // Clear selection and update formatting state immediately
+
+// Perform deletion for each selected ID
+for (final id in idsToDelete) {
+await dbService.deleteItem(id);
+}
+ScaffoldMessenger.of(context).showSnackBar(
+SnackBar(content: Text('${idsToDelete.length} items deleted.')),
+);
+}
+
+Future<void> _updateSelectedItems(bool isCompleted) async {
+final idsToUpdate = List<int>.from(_selectedItemIds);
+
+for (final id in idsToUpdate) {
+await dbService.updateItem(id, {'is_completed': isCompleted});
+}
+// Re-fetch or rely on the stream to update UI
+}
+
+// NEW: Update selected items with a styling property
+Future<void> _updateSelectedItemsStyle(Map<String, dynamic> styleUpdate) async {
+final idsToUpdate = List<int>.from(_selectedItemIds);
+if (idsToUpdate.isEmpty) return;
+
+// Perform bulk update on the database
+for (final id in idsToUpdate) {
+await dbService.updateItem(id, styleUpdate);
+}
+}
+
+
+// --- Reordering Logic (Requires 'sort_order' column in DB) ---
+void _onReorder(int oldIndex, int newIndex) async {
+// 1. Handle local reordering immediately for smooth UX
+setState(() {
+if (newIndex > oldIndex) {
+ newIndex -= 1;
+}
+final item = _items.removeAt(oldIndex);
+_items.insert(newIndex, item);
+});
+
+// 2. Prepare the bulk update for Supabase
+final List<Map<String, dynamic>> updates = [];
+for (int i = 0; i < _items.length; i++) {
+updates.add({
+ 'id': _items[i]['id'],
+ 'sort_order': i, // Use the current list index as the new sort_order
+});
+}
+
+// 3. Send bulk updates to Supabase
+try {
+await dbService.bulkUpdateItemSortOrder(updates);
+} catch (e) {
+if (mounted) {
+ ScaffoldMessenger.of(context).showSnackBar(
+ SnackBar(content: Text('Failed to save new order: $e')),
+ );
+}
+}
+}
+
+// Helper function to convert Hex String to Color
+Color _hexToColor(String? hex) {
+// Get the theme's default text color (handles dark/light mode)
+final defaultColor = Theme.of(context).textTheme.bodyMedium?.color ?? Colors.black;
+
+if (hex == null || hex.isEmpty) {
+return defaultColor; // Use theme default if no color is set
+}
+
+hex = hex.replaceFirst('#', '');
+// Ensure it has 6 or 8 digits, prepend FF if only 6 are present
+if (hex.length == 6) {
+hex = 'FF$hex';
+} else if (hex.length != 8) {
+return defaultColor; // Use theme default if hex is invalid
+}
+try {
+return Color(int.parse(hex, radix: 16));
+} catch (_) {
+return defaultColor;
+}
+}
+
+// --- List Name Update Methods (New) ---
+
+Future<void> _updateListName(String newName) async {
+ final trimmedName = newName.trim();
+ // Check if the name has changed and is not empty
+ if (trimmedName.isEmpty || trimmedName == _localListName) return;
+
+ try {
+ // Database call to update the list name
+ await dbService.updateListName(int.parse(widget.listId), trimmedName);
  
- // State for multi-selection
- final List<int> _selectedItemIds = [];
- bool get isSelecting => _selectedItemIds.isNotEmpty;
-
- // State for the bottom options bar (just an example for font size)
- double _currentFontSize = 16.0;
+ // Update the local state
+ setState(() {
+  _localListName = trimmedName;
+ });
  
- // NEW: Formatting states for the SELECTED items (used for the bottom bar UI)
- bool _isBoldSelected = false;
- bool _isItalicSelected = false;
- // Note: Color state is tracked implicitly or handled in the color picker/logic
-
- // --- Initialization and Cleanup ---
-
- @override
- void initState() {
-  super.initState();
-  // Start listening to the stream immediately
-  dbService.getItemsStream(int.parse(widget.listId)).listen((data) {
-   if (mounted) {
-    // Update the local list whenever Supabase emits new data
-    setState(() {
-     _items = data;
-    });
-   }
-  });
- }
-
- @override
- void dispose() {
-  _addItemController.dispose();
-  _addItemFocusNode.dispose();
-  super.dispose();
- }
- 
- // --- Selection Management ---
-
- void _updateFormattingBarState() {
-  if (_selectedItemIds.isEmpty) {
-   setState(() {
-    _isBoldSelected = false;
-    _isItalicSelected = false;
-   });
-   return;
-  }
-
-  // Get the items corresponding to selected IDs
-  final selectedItems = _items.where((item) => _selectedItemIds.contains(item['id'])).toList();
-  
-  if (selectedItems.isEmpty) return;
-  
-  // Check if ALL selected items share the property (for UI state)
-  final allBold = selectedItems.every((item) => item['is_bold'] == true);
-  final allItalic = selectedItems.every((item) => item['is_italic'] == true);
-
-  setState(() {
-   _isBoldSelected = allBold;
-   _isItalicSelected = allItalic;
-  });
- }
-
-
- void _toggleSelection(int itemId) {
-  setState(() {
-   if (_selectedItemIds.contains(itemId)) {
-    _selectedItemIds.remove(itemId);
-   } else {
-    _selectedItemIds.add(itemId);
-   }
-   _updateFormattingBarState();
-  });
- }
- 
- void _clearSelection() {
-  setState(() {
-   _selectedItemIds.clear();
-   _updateFormattingBarState();
-  });
- }
-
- // --- Core Action Methods ---
-
- void _addNewItem(String title) async {
-  final trimmedTitle = title.trim();
-  if (trimmedTitle.isEmpty) return;
-
-  await dbService.addItem(int.parse(widget.listId), trimmedTitle);
-  
-  _addItemController.clear();
-  _addItemFocusNode.requestFocus(); // Keep focus for rapid entry
- }
-
- Future<void> _deleteSelectedItems() async {
-  final idsToDelete = List<int>.from(_selectedItemIds);
-  _clearSelection(); // Clear selection and update formatting state immediately
-  
-  // Perform deletion for each selected ID
-  for (final id in idsToDelete) {
-   await dbService.deleteItem(id);
-  }
+ if (mounted) {
   ScaffoldMessenger.of(context).showSnackBar(
-   SnackBar(content: Text('${idsToDelete.length} items deleted.')),
+  const SnackBar(content: Text('List name updated successfully.')),
   );
  }
- 
- Future<void> _updateSelectedItems(bool isCompleted) async {
-  final idsToUpdate = List<int>.from(_selectedItemIds);
-  
-  for (final id in idsToUpdate) {
-   await dbService.updateItem(id, {'is_completed': isCompleted});
-  }
-  // Re-fetch or rely on the stream to update UI
+ } catch (e) {
+ if (mounted) {
+  ScaffoldMessenger.of(context).showSnackBar(
+  SnackBar(content: Text('Failed to update list name: ${e.toString()}')),
+  );
  }
- 
- // NEW: Update selected items with a styling property
- Future<void> _updateSelectedItemsStyle(Map<String, dynamic> styleUpdate) async {
-  final idsToUpdate = List<int>.from(_selectedItemIds);
-  if (idsToUpdate.isEmpty) return;
-  
-  // Perform bulk update on the database
-  for (final id in idsToUpdate) {
-   await dbService.updateItem(id, styleUpdate);
-  }
  }
+}
 
-
- // --- Reordering Logic (Requires 'sort_order' column in DB) ---
- void _onReorder(int oldIndex, int newIndex) async { 
-  // 1. Handle local reordering immediately for smooth UX
-  setState(() {
-   if (newIndex > oldIndex) {
-    newIndex -= 1;
-   }
-   final item = _items.removeAt(oldIndex);
-   _items.insert(newIndex, item);
-  });
-  
-  // 2. Prepare the bulk update for Supabase
-  final List<Map<String, dynamic>> updates = [];
-  for (int i = 0; i < _items.length; i++) {
-   updates.add({
-    'id': _items[i]['id'], 
-    'sort_order': i, // Use the current list index as the new sort_order
-   });
-  }
-  
-  // 3. Send bulk updates to Supabase
-  try {
-   await dbService.bulkUpdateItemSortOrder(updates);
-  } catch (e) {
-   if (mounted) {
-    ScaffoldMessenger.of(context).showSnackBar(
-     SnackBar(content: Text('Failed to save new order: $e')),
-    );
-   }
-  }
- }
- 
- // Helper function to convert Hex String to Color
- Color _hexToColor(String hex) {
-  hex = hex.replaceFirst('#', '');
-  // Ensure it has 6 or 8 digits, prepend FF if only 6 are present
-  if (hex.length == 6) {
-   hex = 'FF$hex';
-  } else if (hex.length != 8) {
-   return Theme.of(context).textTheme.bodyMedium?.color ?? Colors.black;
-  }
-  return Color(int.parse(hex, radix: 16));
- }
-
-
- // --- UI Builders ---
-
- Widget _buildNormalAppBar() {
-    return AppBar(
-      title: Text(widget.listName),
-      actions: [
-        IconButton(
-          icon: const Icon(Icons.brush),
-          onPressed: () {
-            Navigator.push(context, MaterialPageRoute(builder: (_) => const DrawingScreen()));
-          },
-        ),
-        IconButton(
-          icon: const Icon(Icons.people), // Updated icon
-          onPressed: _showMembersDialog, // New handler
-        ),
-      ],
-    );
-  }
-
- // FIX: Explicitly set return type to AppBar (which implements PreferredSizeWidget)
- AppBar _buildSelectionAppBar() {
-  return AppBar(
-   title: Text('${_selectedItemIds.length} Items Selected'),
-   leading: IconButton(
-    icon: const Icon(Icons.close),
-    onPressed: _clearSelection,
+// Dialog to handle name editing
+void _showEditTitleDialog() {
+ final titleController = TextEditingController(text: _localListName);
+ showDialog(
+ context: context,
+ builder: (context) {
+  return AlertDialog(
+  title: const Text('Edit List Name'),
+  content: TextField(
+   controller: titleController,
+   decoration: const InputDecoration(hintText: "Enter new list name"),
+  ),
+  actions: [
+   TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+   ElevatedButton(
+   onPressed: () {
+    Navigator.pop(context);
+    _updateListName(titleController.text); // Call the update function
+   },
+   child: const Text('Save'),
    ),
-   actions: [
-    // Check All / Uncheck All (Toggle completion status)
-    IconButton(
-     icon: const Icon(Icons.select_all),
-     tooltip: 'Check All / Uncheck All',
-     onPressed: () {
-      // Check if ALL selected items are completed
-      final allCompleted = _selectedItemIds.every((id) => _items.firstWhere((item) => item['id'] == id)['is_completed'] == true);
-      // If all are completed, uncheck them. Otherwise, check them.
-      _updateSelectedItems(!allCompleted);
-     },
-    ),
-    IconButton(
-     icon: const Icon(Icons.delete),
-     tooltip: 'Delete Selected',
-     onPressed: _deleteSelectedItems,
-    ),
-   ],
+  ],
   );
- }
- 
- // Renders the bottom bar for formatting when in normal mode (SIMPLIFIED)
- Widget _buildNormalBottomBar() {
-  return BottomAppBar(
+ },
+ );
+}
+
+// --- UI Builders ---
+
+Widget _buildNormalAppBar() {
+ return AppBar(
+ title: GestureDetector(
+  onTap: _showEditTitleDialog, // <--- Title tap now opens the edit dialog
+  child: Text(_localListName), // <--- Using local name
+ ),
+ actions: [
+  IconButton(
+  icon: const Icon(Icons.brush),
+  onPressed: () {
+   Navigator.push(context, MaterialPageRoute(builder: (_) => const DrawingScreen()));
+  },
+  ),
+  IconButton(
+  icon: const Icon(Icons.people), // Updated icon
+  onPressed: _showMembersDialog, // New handler
+  ),
+ ],
+ );
+}
+
+// FIX: Explicitly set return type to AppBar (which implements PreferredSizeWidget)
+AppBar _buildSelectionAppBar() {
+return AppBar(
+title: Text('${_selectedItemIds.length} Items Selected'),
+leading: IconButton(
+ icon: const Icon(Icons.close),
+ onPressed: _clearSelection,
+),
+actions: [
+ // Check All / Uncheck All (Toggle completion status)
+ IconButton(
+ icon: const Icon(Icons.select_all),
+ tooltip: 'Check All / Uncheck All',
+ onPressed: () {
+ // Check if ALL selected items are completed
+ final allCompleted = _selectedItemIds.every((id) => _items.firstWhere((item) => item['id'] == id)['is_completed'] == true);
+ // If all are completed, uncheck them. Otherwise, check them.
+ _updateSelectedItems(!allCompleted);
+ },
+ ),
+ IconButton(
+ icon: const Icon(Icons.delete),
+ tooltip: 'Delete Selected',
+ onPressed: _deleteSelectedItems,
+ ),
+],
+);
+}
+
+// Renders the bottom bar for formatting when in normal mode (SIMPLIFIED)
+Widget _buildNormalBottomBar() {
+return BottomAppBar(
+child: Row(
+ mainAxisAlignment: MainAxisAlignment.spaceAround,
+ children: <Widget>[
+ // Font Size Button
+ IconButton(
+ icon: const Icon(Icons.format_size),
+ onPressed: () {
+ setState(() {
+  _currentFontSize = _currentFontSize == 16.0 ? 20.0 : 16.0;
+ });
+ },
+ tooltip: 'Toggle Font Size',
+ ),
+ // Disable Checkboxes Button (Checkbox with slash icon)
+ IconButton(
+ icon: const Icon(Icons.disabled_by_default_outlined),
+ onPressed: () {
+ // TODO: Implement logic to toggle checkbox visibility/functionality
+ },
+ tooltip: 'Hide Checkboxes',
+ ),
+ const Spacer(), // Pushes buttons to the left
+ ],
+),
+);
+}
+
+// Renders the bottom bar for bulk actions OR single item formatting
+Widget _buildSelectionBottomBar() {
+final isSingleItemSelected = _selectedItemIds.length == 1;
+
+// Group bulk actions and single-item formatting
+final actions = isSingleItemSelected ? <Widget>[
+// 1. BOLD TOGGLE
+IconButton(
+ icon: Icon(Icons.format_bold, color: _isBoldSelected ? Theme.of(context).colorScheme.primary : Colors.grey),
+ onPressed: () async {
+ final newState = !_isBoldSelected;
+ await _updateSelectedItemsStyle({'is_bold': newState});
+ _updateFormattingBarState(); // Refresh UI state
+ },
+ tooltip: 'Bold',
+),
+// 2. ITALIC TOGGLE
+IconButton(
+ icon: Icon(Icons.format_italic, color: _isItalicSelected ? Theme.of(context).colorScheme.primary : Colors.grey),
+ onPressed: () async {
+ final newState = !_isItalicSelected;
+ await _updateSelectedItemsStyle({'is_italic': newState});
+ _updateFormattingBarState(); // Refresh UI state
+ },
+ tooltip: 'Italicize',
+),
+// 3. COLOR PICKER (Placeholder Toggling between Black and Red)
+IconButton(
+ icon: const Icon(Icons.color_lens),
+ onPressed: () async {
+ final currentItem = _items.firstWhere((item) => item['id'] == _selectedItemIds.first);
+ final currentColorHex = currentItem['text_color'] as String? ?? '000000';
+ // Toggle color between '000000' (black) and 'FF0000' (red) for demo
+ final newColorHex = currentColorHex.toUpperCase() == '000000' ? 'FF0000' : '000000';
+ await _updateSelectedItemsStyle({'text_color': newColorHex});
+ // The stream will handle the UI refresh.
+ },
+ tooltip: 'Change Font Color/Highlight (Demo)',
+),
+] : <Widget>[
+// Bulk actions when multiple items are selected
+IconButton(
+ icon: const Icon(Icons.check_box),
+ onPressed: () => _updateSelectedItems(true),
+ tooltip: 'Check All Selected',
+),
+IconButton(
+ icon: const Icon(Icons.check_box_outline_blank),
+ onPressed: () => _updateSelectedItems(false),
+ tooltip: 'Uncheck All Selected',
+),
+IconButton(
+ icon: const Icon(Icons.delete),
+ onPressed: _deleteSelectedItems,
+ tooltip: 'Delete Selected Items',
+),
+];
+
+return BottomAppBar(
+child: Row(
+ mainAxisAlignment: MainAxisAlignment.spaceAround,
+ children: [
+ ...actions,
+ // Always include the clear selection button
+ IconButton(
+ icon: const Icon(Icons.cancel),
+ onPressed: _clearSelection,
+ tooltip: 'Clear Selection',
+ ),
+ ],
+),
+);
+}
+
+@override
+Widget build(BuildContext context) {
+return Scaffold(
+// FIX: AppBar return types are now explicitly AppBar, resolving the previous error.
+appBar: isSelecting ? _buildSelectionAppBar() : _buildNormalAppBar() as PreferredSizeWidget,
+
+// Tap outside the list to deselect all items
+body: GestureDetector(
+ onTap: isSelecting ? _clearSelection : null,
+ child: Column(
+ children: [
+ // 1. The main list of items (Now ReorderableListView)
+ Expanded(
+ child: _items.isEmpty
+  ? const Center(child: Text("Start by adding a new item below."))
+  : ReorderableListView.builder(
+  padding: const EdgeInsets.only(top: 8.0, bottom: 8.0),
+  itemCount: _items.length,
+  onReorder: _onReorder,
+  itemBuilder: (context, index) {
+   final item = _items[index];
+   final itemId = item['id'] as int;
+   final isCompleted = item['is_completed'] as bool? ?? false;
+   final isSelected = _selectedItemIds.contains(itemId);
+     
+      // NEW: Read styling properties
+      final isBold = item['is_bold'] as bool? ?? false;
+      final isItalic = item['is_italic'] as bool? ?? false;
+      // Default color to theme if 'text_color' is missing or null
+      final colorHex = item['text_color'] as String?; // Allow null/missing
+      final itemColor = _hexToColor(colorHex); // Uses theme default if hex is null/invalid
+
+   // Wrap each item in a LongPress and Tap Detector
+   return GestureDetector(
+   key: ValueKey(itemId), // Required for ReorderableListView
+   onLongPress: () => _toggleSelection(itemId),
+   onTap: isSelecting ? () => _toggleSelection(itemId) : null, // Only toggle selection if mode is active
+
+   child: Container(
+   color: isSelected ? Theme.of(context).colorScheme.primary.withOpacity(0.1) : null,
+   child: Padding(
+   padding: const EdgeInsets.symmetric(vertical: 4.0),
    child: Row(
-    mainAxisAlignment: MainAxisAlignment.spaceAround,
-    children: <Widget>[
-     // Font Size Button
-     IconButton(
-      icon: const Icon(Icons.format_size),
-      onPressed: () {
-       setState(() {
-        _currentFontSize = _currentFontSize == 16.0 ? 20.0 : 16.0; 
-       });
-      },
-      tooltip: 'Toggle Font Size',
-     ),
-     // Disable Checkboxes Button (Checkbox with slash icon)
-     IconButton(
-      icon: const Icon(Icons.disabled_by_default_outlined),
-      onPressed: () {
-       // TODO: Implement logic to toggle checkbox visibility/functionality
-      },
-      tooltip: 'Hide Checkboxes',
-     ),
-     const Spacer(), // Pushes buttons to the left
-    ],
-   ),
-  );
- }
-
- // Renders the bottom bar for bulk actions OR single item formatting
- Widget _buildSelectionBottomBar() {
-  final isSingleItemSelected = _selectedItemIds.length == 1;
-
-  // Group bulk actions and single-item formatting
-  final actions = isSingleItemSelected ? <Widget>[
-   // 1. BOLD TOGGLE
-   IconButton(
-    icon: Icon(Icons.format_bold, color: _isBoldSelected ? Theme.of(context).colorScheme.primary : Colors.grey),
-    onPressed: () async {
-     final newState = !_isBoldSelected;
-     await _updateSelectedItemsStyle({'is_bold': newState});
-     _updateFormattingBarState(); // Refresh UI state
-    },
-    tooltip: 'Bold',
-   ),
-   // 2. ITALIC TOGGLE
-   IconButton(
-    icon: Icon(Icons.format_italic, color: _isItalicSelected ? Theme.of(context).colorScheme.primary : Colors.grey),
-    onPressed: () async {
-     final newState = !_isItalicSelected;
-     await _updateSelectedItemsStyle({'is_italic': newState});
-     _updateFormattingBarState(); // Refresh UI state
-    },
-    tooltip: 'Italicize',
-   ),
-   // 3. COLOR PICKER (Placeholder Toggling between Black and Red)
-   IconButton(
-    icon: const Icon(Icons.color_lens),
-    onPressed: () async {
-     final currentItem = _items.firstWhere((item) => item['id'] == _selectedItemIds.first);
-     final currentColorHex = currentItem['text_color'] as String? ?? '000000';
-     // Toggle color between black (000000) and red (FF0000) for demo
-     final newColorHex = currentColorHex.toUpperCase() == '000000' ? 'FF0000' : '000000';
-     await _updateSelectedItemsStyle({'text_color': newColorHex});
-     // Note: Since the color logic is complex, we just update the item. 
-     // The stream will handle the UI refresh.
-    },
-    tooltip: 'Change Font Color/Highlight (Demo)',
-   ),
-  ] : <Widget>[
-   // Bulk actions when multiple items are selected
-   IconButton(
-    icon: const Icon(Icons.check_box),
-    onPressed: () => _updateSelectedItems(true),
-    tooltip: 'Check All Selected',
-   ),
-   IconButton(
-    icon: const Icon(Icons.check_box_outline_blank),
-    onPressed: () => _updateSelectedItems(false),
-    tooltip: 'Uncheck All Selected',
-   ),
-   IconButton(
-    icon: const Icon(Icons.delete),
-    onPressed: _deleteSelectedItems,
-    tooltip: 'Delete Selected Items',
-   ),
-  ];
-
-  return BottomAppBar(
-   child: Row(
-    mainAxisAlignment: MainAxisAlignment.spaceAround,
     children: [
-     ...actions,
-     // Always include the clear selection button
-     IconButton(
-      icon: const Icon(Icons.cancel),
-      onPressed: _clearSelection,
-      tooltip: 'Clear Selection',
+    // LEFT SIDE: Selection/Checkbox Toggling Zone
+    GestureDetector(
+    onTap: isSelecting
+     ? () => _toggleSelection(itemId) // If selecting, tap toggles selection
+     : () async { // Otherwise, tap toggles completion
+     await dbService.updateItem(
+     itemId,
+     {'is_completed': !isCompleted},
+     );
+     },
+    child: Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 16.0),
+    child: isSelecting
+     ? Icon( // Show selection indicator
+     isSelected ? Icons.check_circle : Icons.circle_outlined,
+     color: Theme.of(context).colorScheme.primary,
+     )
+     : Icon( // Show completion checkbox
+     isCompleted ? Icons.check_box : Icons.check_box_outline_blank,
+     color: isCompleted ? Theme.of(context).colorScheme.primary : Colors.grey,
      ),
+    ),
+    ),
+
+    // RIGHT SIDE: Editable Text Field Zone
+    Expanded(
+    child: TextFormField(
+    initialValue: item['title'] as String,
+    enabled: !isSelecting, // Disable editing when selecting
+    keyboardType: TextInputType.text,
+    style: TextStyle(
+     fontSize: _currentFontSize,
+     decoration: isCompleted ? TextDecoration.lineThrough : null,
+    
+          // NEW STYLING & FIX FOR DARK MODE TEXT COLOR
+          color: isCompleted ? itemColor.withOpacity(0.6) : itemColor,
+          fontWeight: isBold ? FontWeight.bold : FontWeight.normal,
+          fontStyle: isItalic ? FontStyle.italic : FontStyle.normal,
+    ),
+    decoration: const InputDecoration(
+     border: InputBorder.none,
+     contentPadding: EdgeInsets.zero,
+    ),
+    // On submit (deletion/update logic)
+    onFieldSubmitted: (newTitle) async {
+     final trimmedTitle = newTitle.trim();
+     if (trimmedTitle.isEmpty) {
+     await dbService.deleteItem(itemId);
+     } else {
+     await dbService.updateItem(
+     itemId,
+     {'title': trimmedTitle},
+     );
+     }
+    },
+    ),
+    ),
     ],
    ),
-  );
- }
-
- @override
- Widget build(BuildContext context) {
-  return Scaffold(
-   // FIX: AppBar return types are now explicitly AppBar, resolving the previous error.
-   appBar: isSelecting ? _buildSelectionAppBar() : _buildNormalAppBar() as PreferredSizeWidget,
-   
-   // Tap outside the list to deselect all items
-   body: GestureDetector(
-    onTap: isSelecting ? _clearSelection : null,
-    child: Column(
-     children: [
-      // 1. The main list of items (Now ReorderableListView)
-      Expanded(
-       child: _items.isEmpty 
-         ? const Center(child: Text("Start by adding a new item below."))
-         : ReorderableListView.builder(
-           padding: const EdgeInsets.only(top: 8.0, bottom: 8.0),
-           itemCount: _items.length,
-           onReorder: _onReorder,
-           itemBuilder: (context, index) {
-            final item = _items[index];
-            final itemId = item['id'] as int;
-            final isCompleted = item['is_completed'] as bool? ?? false;
-            final isSelected = _selectedItemIds.contains(itemId);
-                        
-                        // NEW: Read styling properties
-                        final isBold = item['is_bold'] as bool? ?? false;
-                        final isItalic = item['is_italic'] as bool? ?? false;
-                        // Default color to theme if 'text_color' is missing or null
-                        final colorHex = item['text_color'] as String? ?? '000000';
-                        final itemColor = _hexToColor(colorHex);
-
-            // Wrap each item in a LongPress and Tap Detector
-            return GestureDetector(
-             key: ValueKey(itemId), // Required for ReorderableListView
-             onLongPress: () => _toggleSelection(itemId),
-             onTap: isSelecting ? () => _toggleSelection(itemId) : null, // Only toggle selection if mode is active
-
-             child: Container(
-              color: isSelected ? Theme.of(context).colorScheme.primary.withOpacity(0.1) : null,
-              child: Padding(
-               padding: const EdgeInsets.symmetric(vertical: 4.0),
-               child: Row(
-                children: [
-                 // LEFT SIDE: Selection/Checkbox Toggling Zone
-                 GestureDetector(
-                  onTap: isSelecting
-                    ? () => _toggleSelection(itemId) // If selecting, tap toggles selection
-                    : () async { // Otherwise, tap toggles completion
-                      await dbService.updateItem(
-                       itemId, 
-                       {'is_completed': !isCompleted},
-                      );
-                     },
-                  child: Padding(
-                   padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                   child: isSelecting
-                     ? Icon( // Show selection indicator
-                       isSelected ? Icons.check_circle : Icons.circle_outlined,
-                       color: Theme.of(context).colorScheme.primary,
-                      )
-                     : Icon( // Show completion checkbox
-                       isCompleted ? Icons.check_box : Icons.check_box_outline_blank,
-                       color: isCompleted ? Theme.of(context).colorScheme.primary : Colors.grey,
-                      ),
-                  ),
-                 ),
-
-                 // RIGHT SIDE: Editable Text Field Zone
-                 Expanded(
-                  child: TextFormField(
-                   initialValue: item['title'] as String,
-                   enabled: !isSelecting, // Disable editing when selecting
-                   keyboardType: TextInputType.text,
-                   style: TextStyle(
-                    fontSize: _currentFontSize,
-                    decoration: isCompleted ? TextDecoration.lineThrough : null,
-                    
-                                        // NEW STYLING
-                                        color: isCompleted ? itemColor.withOpacity(0.6) : itemColor,
-                                        fontWeight: isBold ? FontWeight.bold : FontWeight.normal,
-                                        fontStyle: isItalic ? FontStyle.italic : FontStyle.normal,
-                   ),
-                   decoration: const InputDecoration(
-                    border: InputBorder.none,
-                    contentPadding: EdgeInsets.zero,
-                   ),
-                   // On submit (deletion/update logic)
-                   onFieldSubmitted: (newTitle) async {
-                    final trimmedTitle = newTitle.trim();
-                    if (trimmedTitle.isEmpty) {
-                     await dbService.deleteItem(itemId);
-                    } else {
-                     await dbService.updateItem(
-                      itemId, 
-                      {'title': trimmedTitle},
-                     );
-                    }
-                   },
-                  ),
-                 ),
-                ],
-               ),
-              ),
-             ),
-            );
-           },
-          ),
-      ),
-      
-      // 2. Add New Item Input Field
-      if (!isSelecting) // Hide input field when in selection mode
-       Padding(
-        padding: const EdgeInsets.all(8.0),
-        child: TextField(
-         controller: _addItemController,
-         focusNode: _addItemFocusNode,
-         decoration: InputDecoration(
-          hintText: "New item...",
-          suffixIcon: IconButton(
-           icon: const Icon(Icons.add),
-           onPressed: () => _addNewItem(_addItemController.text),
-          ),
-          border: const OutlineInputBorder(),
-         ),
-         onSubmitted: (value) {
-          _addNewItem(value);
-         },
-        ),
-       ),
-     ],
-    ),
    ),
+   ),
+   );
+  },
+  ),
+ ),
+ 
+ // 2. Add New Item Input Field
+ if (!isSelecting) // Hide input field when in selection mode
+ Padding(
+  padding: const EdgeInsets.all(8.0),
+  child: TextField(
+  controller: _addItemController,
+  focusNode: _addItemFocusNode,
+  decoration: InputDecoration(
+  hintText: "New item...",
+  suffixIcon: IconButton(
+  icon: const Icon(Icons.add),
+  onPressed: () => _addNewItem(_addItemController.text),
+  ),
+  border: const OutlineInputBorder(),
+  ),
+  onSubmitted: (value) {
+  _addNewItem(value);
+  },
+  ),
+ ),
+ ],
+ ),
+),
+
+// 3. Bottom Options Bar for Styling/Tools
+bottomNavigationBar: isSelecting ? _buildSelectionBottomBar() : _buildNormalBottomBar(),
+);
+}
+// NEW: Dialog to prompt for email and call addListMember
+void _showShareDialog() {
+ final shareController = TextEditingController();
+ showDialog(
+ context: context,
+ builder: (context) {
+  return AlertDialog(
+  title: Text('Share "${_localListName}"'),
+  content: TextField(
+   controller: shareController,
+   decoration: const InputDecoration(
+   hintText: "Enter user's email address",
+   ),
+   keyboardType: TextInputType.emailAddress,
+  ),
+  actions: [
+   TextButton(
+   onPressed: () => Navigator.pop(context),
+   child: const Text('Cancel'),
+   ),
+   ElevatedButton(
+   onPressed: () async {
+    Navigator.pop(context);
+    await _addMember(shareController.text);
+   },
+   child: const Text('Share'),
+   ),
+  ],
+  );
+ },
+ );
+}
+// NEW: Dialog to view, add, and remove members
+void _showMembersDialog() {
+ showDialog(
+ context: context,
+ builder: (context) {
+  return AlertDialog(
+  title: const Text('List Members'),
+  content: SizedBox(
+   width: double.maxFinite,
+   child: FutureBuilder<List<Map<String, dynamic>>>(
+   future: dbService.getListMembers(int.parse(widget.listId)),
+   builder: (context, snapshot) {
+    if (snapshot.connectionState == ConnectionState.waiting) {
+    return const Center(child: CircularProgressIndicator());
+    }
+    if (snapshot.hasError) {
+    return Center(child: Text('Error: ${snapshot.error}'));
+    }
    
-   // 3. Bottom Options Bar for Styling/Tools
-   bottomNavigationBar: isSelecting ? _buildSelectionBottomBar() : _buildNormalBottomBar(),
+    final members = snapshot.data ?? [];
+    final currentUserId = dbService.currentUser?.id;
+    final isCurrentUserOwner = members.any((m) => m['user_id'] == currentUserId && m['role'] == 'owner');
+
+    return ListView.builder(
+    shrinkWrap: true,
+    itemCount: members.length,
+    itemBuilder: (context, index) {
+     final member = members[index];
+          // Safely access nested user details
+     final userDetails = member['users'] as Map<String, dynamic>?;
+          final userMetadata = userDetails?['user_metadata'] as Map<String, dynamic>?;
+     final username = userMetadata?['username'] ?? userDetails?['email'] ?? 'Unknown User';
+     final isOwner = member['role'] == 'owner';
+     final isSelf = member['user_id'] == currentUserId;
+
+     return ListTile(
+     title: Text(username + (isSelf ? ' (You)' : '')),
+     subtitle: Text(isOwner ? 'Owner' : 'Member'),
+     trailing: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+      // Owner Transfer Button
+      if (isCurrentUserOwner && !isOwner)
+       IconButton(
+       icon: const Icon(Icons.star_border, color: Colors.amber),
+       onPressed: () => _showOwnerTransferConfirmation(
+        member['user_id'], username
+       ),
+       tooltip: 'Make Owner',
+       ),
+      
+      // Remove Member Button
+      if (isCurrentUserOwner && !isOwner)
+       IconButton(
+       icon: const Icon(Icons.remove_circle_outline, color: Colors.red),
+       onPressed: () => _removeMember(member['user_id'], username),
+       tooltip: 'Remove Member',
+       ),
+      ],
+     ),
+     );
+    },
+    );
+   },
+   ),
+  ),
+  actions: [
+   TextButton(
+   onPressed: () => Navigator.pop(context),
+   child: const Text('Close'),
+   ),
+   ElevatedButton.icon(
+   onPressed: () {
+    Navigator.pop(context); // Close members dialog
+    _showAddMemberDialog(); // Open add member dialog
+   },
+   icon: const Icon(Icons.add),
+   label: const Text('Add Member'),
+   ),
+  ],
+  );
+ },
+ ).then((_) => setState(() {})); // Reload on close to refresh member list
+}
+
+// Helper dialog for adding a member
+void _showAddMemberDialog() {
+ final shareController = TextEditingController();
+ showDialog(
+ context: context,
+ builder: (context) {
+  return AlertDialog(
+  title: Text('Add Member to "${_localListName}"'),
+  content: TextField(
+   controller: shareController,
+   decoration: const InputDecoration(
+   hintText: "Enter user's email address",
+   ),
+   keyboardType: TextInputType.emailAddress,
+  ),
+  actions: [
+   TextButton(
+   onPressed: () => Navigator.pop(context),
+   child: const Text('Cancel'),
+   ),
+   ElevatedButton(
+   onPressed: () async {
+    Navigator.pop(context);
+    await _addMember(shareController.text);
+   },
+   child: const Text('Add'),
+   ),
+  ],
+  );
+ },
+ );
+}
+
+Future<void> _addMember(String email) async {
+ final trimmedEmail = email.trim();
+ if (trimmedEmail.isEmpty) return;
+
+ try {
+ await dbService.addListMember(int.parse(widget.listId), trimmedEmail);
+ // Refresh the UI after successful addition
+ setState(() {});
+ if (mounted) {
+  ScaffoldMessenger.of(context).showSnackBar(
+  SnackBar(content: Text('Member added: $trimmedEmail')),
   );
  }
- // NEW: Dialog to prompt for email and call addListMember
-  void _showShareDialog() {
-    final shareController = TextEditingController();
-    showDialog(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: Text('Share "${widget.listName}"'),
-          content: TextField(
-            controller: shareController,
-            decoration: const InputDecoration(
-              hintText: "Enter user's email address",
-            ),
-            keyboardType: TextInputType.emailAddress,
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: () async {
-                Navigator.pop(context);
-                await _addMember(shareController.text);
-              },
-              child: const Text('Share'),
-            ),
-          ],
-        );
-      },
-    );
-  }
-  // NEW: Dialog to view, add, and remove members
-  void _showMembersDialog() {
-    showDialog(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text('List Members'),
-          content: SizedBox(
-            width: double.maxFinite,
-            child: FutureBuilder<List<Map<String, dynamic>>>(
-              future: dbService.getListMembers(int.parse(widget.listId)),
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-                if (snapshot.hasError) {
-                  return Center(child: Text('Error: ${snapshot.error}'));
-                }
-                
-                final members = snapshot.data ?? [];
-                final currentUserId = dbService.currentUser?.id;
-                final isCurrentUserOwner = members.any((m) => m['user_id'] == currentUserId && m['role'] == 'owner');
+ } catch (e) {
+ if (mounted) {
+  ScaffoldMessenger.of(context).showSnackBar(
+  SnackBar(content: Text('Failed to add member: ${e.toString()}')),
+  );
+ }
+ }
+}
 
-                return ListView.builder(
-                  shrinkWrap: true,
-                  itemCount: members.length,
-                  itemBuilder: (context, index) {
-                    final member = members[index];
-                    final userDetails = member['users'] as Map<String, dynamic>;
-                    final username = userDetails['user_metadata']['username'] ?? userDetails['email'];
-                    final isOwner = member['role'] == 'owner';
-                    final isSelf = member['user_id'] == currentUserId;
+Future<void> _removeMember(String userId, String username) async {
+ try {
+ await dbService.removeListMember(int.parse(widget.listId), userId);
+ setState(() {}); // Refresh the UI
+ if (mounted) {
+  Navigator.pop(context); // Close the members dialog
+  ScaffoldMessenger.of(context).showSnackBar(
+  SnackBar(content: Text('$username removed from list.')),
+  );
+ }
+ } catch (e) {
+ if (mounted) {
+  ScaffoldMessenger.of(context).showSnackBar(
+  SnackBar(content: Text('Failed to remove member: ${e.toString()}')),
+  );
+ }
+ }
+}
 
-                    return ListTile(
-                      title: Text(username + (isSelf ? ' (You)' : '')),
-                      subtitle: Text(isOwner ? 'Owner' : 'Member'),
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          // Owner Transfer Button
-                          if (isCurrentUserOwner && !isOwner)
-                            IconButton(
-                              icon: const Icon(Icons.star_border, color: Colors.amber),
-                              onPressed: () => _showOwnerTransferConfirmation(
-                                member['user_id'], username
-                              ),
-                              tooltip: 'Make Owner',
-                            ),
-                          
-                          // Remove Member Button
-                          if (isCurrentUserOwner && !isOwner)
-                            IconButton(
-                              icon: const Icon(Icons.remove_circle_outline, color: Colors.red),
-                              onPressed: () => _removeMember(member['user_id'], username),
-                              tooltip: 'Remove Member',
-                            ),
-                        ],
-                      ),
-                    );
-                  },
-                );
-              },
+void _showOwnerTransferConfirmation(String userId, String username) {
+ showDialog(
+ context: context,
+ builder: (context) {
+  return AlertDialog(
+  title: const Text('Transfer Ownership'),
+  content: Text.rich(
+        TextSpan(
+          text: 'Are you sure you want to make ',
+          children: [
+            TextSpan(
+              text: username,
+              style: const TextStyle(fontWeight: FontWeight.bold),
             ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Close'),
+            const TextSpan(
+              text: ' the new list owner? This action is ',
             ),
-            ElevatedButton.icon(
-              onPressed: () {
-                Navigator.pop(context); // Close members dialog
-                _showAddMemberDialog(); // Open add member dialog
-              },
-              icon: const Icon(Icons.add),
-              label: const Text('Add Member'),
+             const TextSpan(
+              text: 'not reversible',
+              style: TextStyle(fontWeight: FontWeight.bold, color: Colors.red),
             ),
-          ],
-        );
-      },
-    ).then((_) => setState(() {})); // Reload on close to refresh member list
-  }
+            const TextSpan(
+              text: ' and you will be demoted to a regular member.',
+            ),
+          ]
+        ),
+      ),
+  actions: [
+   TextButton(
+   onPressed: () => Navigator.pop(context),
+   child: const Text('Cancel'),
+   ),
+   ElevatedButton(
+   style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+   onPressed: () async {
+    Navigator.pop(context); // Close confirmation dialog
+    await _transferOwnership(userId, username);
+    Navigator.pop(context); // Close members dialog
+   },
+   child: const Text('Transfer Ownership', style: TextStyle(color: Colors.white)),
+   ),
+  ],
+  );
+ },
+ );
+}
 
-  // Helper dialog for adding a member
-  void _showAddMemberDialog() {
-    final shareController = TextEditingController();
-    showDialog(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: Text('Add Member to "${widget.listName}"'),
-          content: TextField(
-            controller: shareController,
-            decoration: const InputDecoration(
-              hintText: "Enter user's email address",
-            ),
-            keyboardType: TextInputType.emailAddress,
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: () async {
-                Navigator.pop(context);
-                await _addMember(shareController.text);
-              },
-              child: const Text('Add'),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  Future<void> _addMember(String email) async {
-    final trimmedEmail = email.trim();
-    if (trimmedEmail.isEmpty) return;
-
-    try {
-      await dbService.addListMember(int.parse(widget.listId), trimmedEmail);
-      // Refresh the UI after successful addition
-      setState(() {}); 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Member added: $trimmedEmail')),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to add member: ${e.toString()}')),
-        );
-      }
-    }
-  }
-
-  Future<void> _removeMember(String userId, String username) async {
-    try {
-      await dbService.removeListMember(int.parse(widget.listId), userId);
-      setState(() {}); // Refresh the UI
-      if (mounted) {
-        Navigator.pop(context); // Close the members dialog
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('$username removed from list.')),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to remove member: ${e.toString()}')),
-        );
-      }
-    }
-  }
-
-  void _showOwnerTransferConfirmation(String userId, String username) {
-    showDialog(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text('Transfer Ownership'),
-          content: Text(
-            'Are you sure you want to make **$username** the new list owner? This action is **not reversible** and you will be demoted to a regular member.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-              onPressed: () async {
-                Navigator.pop(context); // Close confirmation dialog
-                await _transferOwnership(userId, username);
-                Navigator.pop(context); // Close members dialog
-              },
-              child: const Text('Transfer Ownership', style: TextStyle(color: Colors.white)),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  Future<void> _transferOwnership(String userId, String username) async {
-    try {
-      await dbService.transferOwnership(int.parse(widget.listId), userId);
-      setState(() {}); // Refresh the UI
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Ownership transferred to $username!')),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to transfer ownership: ${e.toString()}')),
-        );
-      }
-    }
-  }
+Future<void> _transferOwnership(String userId, String username) async {
+ try {
+ await dbService.transferOwnership(int.parse(widget.listId), userId);
+ setState(() {}); // Refresh the UI
+ if (mounted) {
+  ScaffoldMessenger.of(context).showSnackBar(
+  SnackBar(content: Text('Ownership transferred to $username!')),
+  );
+ }
+ } catch (e) {
+ if (mounted) {
+  ScaffoldMessenger.of(context).showSnackBar(
+  SnackBar(content: Text('Failed to transfer ownership: ${e.toString()}')),
+  );
+ }
+ }
+}
 }

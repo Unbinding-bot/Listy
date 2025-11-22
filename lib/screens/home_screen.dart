@@ -1,3 +1,5 @@
+// lib/screens/home_screen.dart
+
 import 'package:flutter/material.dart';
 import '../services/supabase_service.dart';
 import 'list_detail_screen.dart';
@@ -236,43 +238,42 @@ class _HomeScreenState extends State<HomeScreen> {
                                     const SizedBox(height: 8),
 
                                     // Item Preview Section (Fetches real data)
-                                    Expanded(
-                                      child: FutureBuilder<List<Map<String, dynamic>>>(
-                                        future: dbService.getListItemsPreview(listId),
-                                        builder: (context, itemSnapshot) {
-                                          if (!itemSnapshot.hasData) {
-                                            return const SizedBox(); 
-                                          }
-                                          
-                                          final previewItems = itemSnapshot.data!;
-                                          
-                                          final previewText = previewItems
-                                              .map((item) => item['title'].toString())
-                                              .join(', ');
-                                          
-                                          // 5. EMPTY LIST PREVIEW FIX: Hide preview text entirely if empty
-                                          if (previewText.isEmpty) {
-                                              return Opacity(
-                                                opacity: 0.5,
-                                                child: Text(
-                                                  'Empty List',
-                                                  style: const TextStyle(fontSize: 14, fontStyle: FontStyle.italic),
-                                                  maxLines: 1, 
-                                                ),
-                                              );
-                                          }
-                                          
-                                          return Opacity(
-                                            opacity: 0.7,
-                                            child: Text(
-                                              previewText,
-                                              style: const TextStyle(fontSize: 14),
-                                              maxLines: 3, 
-                                              overflow: TextOverflow.ellipsis,
-                                            ),
-                                          );
-                                        },
-                                      ),
+                                    // *** FIX APPLIED: Removed Expanded widget here ***
+                                    FutureBuilder<List<Map<String, dynamic>>>(
+                                      future: dbService.getListItemsPreview(listId),
+                                      builder: (context, itemSnapshot) {
+                                        if (!itemSnapshot.hasData) {
+                                          return const SizedBox(); 
+                                        }
+                                        
+                                        final previewItems = itemSnapshot.data!;
+                                        
+                                        final previewText = previewItems
+                                            .map((item) => item['title'].toString())
+                                            .join(', ');
+                                        
+                                        // 5. EMPTY LIST PREVIEW FIX: Display "Empty List" placeholder
+                                        if (previewText.isEmpty) {
+                                            return Opacity(
+                                              opacity: 0.5,
+                                              child: Text(
+                                                'Empty List',
+                                                style: const TextStyle(fontSize: 14, fontStyle: FontStyle.italic),
+                                                maxLines: 1, 
+                                              ),
+                                            );
+                                        }
+                                        
+                                        return Opacity(
+                                          opacity: 0.7,
+                                          child: Text(
+                                            previewText,
+                                            style: const TextStyle(fontSize: 14),
+                                            maxLines: 3, 
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        );
+                                      },
                                     ),
                                   ],
                                 ),
@@ -305,14 +306,16 @@ class _HomeScreenState extends State<HomeScreen> {
             const SnackBar(content: Text('Creating new list...')),
           );
           try {
+            // Note: The new list will have the default name "Untitled List"
             final newList = await dbService.createNewList("Untitled List");
             
             if (context.mounted) {
+              // Navigate to the newly created list
               Navigator.push(
                 context,
                 MaterialPageRoute(
                   builder: (_) => ListDetailScreen(
-                    listId: newList['id'], 
+                    listId: newList['id'].toString(), 
                     listName: newList['name']
                   ),
                 ),
