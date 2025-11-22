@@ -1,4 +1,5 @@
 // lib/screens/list_detail_screen.dart
+
 import 'package:flutter/material.dart';
 import '../services/supabase_service.dart';
 
@@ -16,6 +17,68 @@ class _ListDetailScreenState extends State<ListDetailScreen> {
   late TextEditingController _titleController;
   final TextEditingController _newItemController = TextEditingController();
 
+  // Function to show the share dialog
+  void _showShareDialog() {
+    String username = '';
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text("Share List"),
+          content: TextField(
+            onChanged: (value) => username = value,
+            decoration: const InputDecoration(hintText: "Enter username to share with"),
+          ),
+          actions: <Widget>[
+            TextButton(
+              child: const Text("Cancel"),
+              onPressed: () => Navigator.of(context).pop(),
+            ),
+            ElevatedButton(
+              child: const Text("Share"),
+              onPressed: () {
+                Navigator.of(context).pop();
+                _shareListWithUser(username.trim());
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  // Function to handle the actual sharing logic
+  void _shareListWithUser(String username) async {
+    if (username.isEmpty) return;
+    
+    // Show a temporary snackbar while sharing
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Sharing with $username...')),
+    );
+
+    try {
+      final userId = await _dbService.findUserIdByUsername(username);
+
+      if (userId == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('User not found or profile missing.')),
+        );
+        return;
+      }
+
+      await _dbService.shareList(widget.listId, userId);
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('List shared successfully with $username!')),
+      );
+
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to share: $e')),
+      );
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -28,6 +91,8 @@ class _ListDetailScreenState extends State<ListDetailScreen> {
     if (_titleController.text != widget.listName) {
       _dbService.updateListTitle(widget.listId, _titleController.text);
     }
+    _titleController.dispose();
+    _newItemController.dispose();
     super.dispose();
   }
 
@@ -39,9 +104,11 @@ class _ListDetailScreenState extends State<ListDetailScreen> {
         backgroundColor: Colors.transparent,
         iconTheme: const IconThemeData(color: Colors.black),
         actions: [
-          IconButton(icon: const Icon(Icons.person_add), onPressed: () {
-            // Show Share Dialog logic here
-          })
+          // FIX: Implement the onPressed logic
+          IconButton(
+            icon: const Icon(Icons.person_add), 
+            onPressed: _showShareDialog
+          )
         ],
       ),
       body: Column(
@@ -65,8 +132,17 @@ class _ListDetailScreenState extends State<ListDetailScreen> {
             child: StreamBuilder<List<Map<String, dynamic>>>(
               stream: _dbService.getListItems(widget.listId),
               builder: (context, snapshot) {
-                if (!snapshot.hasData) return const SizedBox();
-                final tasks = snapshot.data!;
+                // RENDER FIX: Show loading while waiting for data
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(child: CircularProgressIndicator());
+                }
+
+                if (snapshot.hasError) {
+                    return Center(child: Text('Error loading items: ${snapshot.error}'));
+                }
+
+                // FIX: Fallback to an empty list instead of a blank SizedBox
+                final tasks = snapshot.data ?? [];
 
                 return ListView.builder(
                   itemCount: tasks.length + 1, // +1 for the "Add Item" row
@@ -85,6 +161,8 @@ class _ListDetailScreenState extends State<ListDetailScreen> {
                             if (val.isNotEmpty) {
                               _dbService.addTask(widget.listId, val);
                               _newItemController.clear();
+                              // Request focus to close the keyboard after submitting
+                              FocusScope.of(context).requestFocus(FocusNode());
                             }
                           },
                         ),
