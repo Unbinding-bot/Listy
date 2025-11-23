@@ -176,25 +176,34 @@ class SupabaseService {
       rethrow;
     }
   }
-
+  
   // Method to fetch the current list of members with profiles (NOT real-time)
   Future<List<Map<String, dynamic>>> getListMembersWithProfiles(int listId) async {
-    // FIX: Removed .execute()
-    final response = await _client
+  
+    // 1. Fetch all user_id UUIDs from the list_members table for the given list.
+    final memberIdsResponse = await _client
         .from('list_members')
-        // We only care about the user_id for the join, so we select the nested profiles
-        .select('profiles!inner(id, username, email), user_id') 
-        .eq('list_id', listId)
-        .order('user_id'); // Order by ID to make it deterministic
+        .select('user_id') 
+        .eq('list_id', listId);
 
-    // The current SDK version returns the List<Map<String, dynamic>> directly 
-    // or throws an error. We don't need to check response.error.
-    final List<dynamic> memberData = response as List<dynamic>;
-
-    // Map the list to extract the profile map directly
-    return memberData
-        .map((item) => (item as Map<String, dynamic>)['profiles'] as Map<String, dynamic>)
+    // Extract the raw list of UUIDs (Strings)
+    final memberUids = (memberIdsResponse as List)
+        .map((row) => row['user_id'] as String)
         .toList();
+
+    if (memberUids.isEmpty) {
+      return [];
+    }
+
+    // 2. Fetch the profile data (username) directly from the profiles table 
+    // using the list of UIDs retrieved in step 1.
+    final profiles = await _client
+        .from('profiles')
+        .select('id, username')
+        .filter('id', 'in', memberUids.toList()); // Safely query all profiles whose ID is in the list
+
+    // Return the list of profiles (e.g., [{'id': '...', 'username': 'user1'}, ...])
+    return (profiles as List).cast<Map<String, dynamic>>();
   }
   
   // FIXED: Real-time stream for list members using switchMap.
@@ -277,4 +286,5 @@ class SupabaseService {
       .eq('list_id', listId)
       .eq('user_id', newOwnerId);
   }
+  
 }
