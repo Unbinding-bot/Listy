@@ -33,48 +33,40 @@ class SupabaseService {
   // RPC to safely create a list and add the creator as a member (Fixes RLS recursion)
   Future<Map<String, dynamic>> createNewList(String listName) async {
     final currentUserId = currentUser?.id;
-    if (currentUserId == null) throw Exception('User not logged in.');
+    if (currentUserId == null) {
+      throw Exception('User not logged in.');
+    }
 
-    // Call your SQL function which creates the list and creates the list_members row
-    final response = await _client.rpc('create_list_and_add_member', params: {'list_name': listName});
+    // Calls the DB RPC which inserts into lists and list_members
+    final response = await _client.rpc(
+      'create_list_and_add_member',
+      params: {'list_name': listName},
+    );  
 
     final listId = response['id'];
-    if (listId == null) throw Exception('Failed to create list.');
+    if (listId == null) {
+      throw Exception('Failed to create list.');
+    }
 
-    // Fetch authoritative list row to get name and any other fields
+    // Fetch the authoritative row (id + name). Schema does not include owner_id on lists,
+    // so we return currentUserId as owner_id for convenience.
     final listRow = await _client.from('lists').select('id, name').eq('id', listId).maybeSingle();
 
     return {
       'id': listRow?['id']?.toString() ?? listId.toString(),
       'name': listRow?['name'] ?? listName,
-      // owner_id is not stored on lists in your schema; leave empty or include current user id
+      // Your schema uses list_members for ownership; return creator id as owner_id for UI convenience.
       'owner_id': currentUserId,
     };
   }
 
-  /// Fetch list row by id (used to get an authoritative name)
+  /// Fetch list row by id (authoritative name)
   Future<Map<String, dynamic>?> getListById(int listId) async {
     final response = await _client.from('lists').select('id, name').eq('id', listId).maybeSingle();
     if (response == null) return null;
     return {
       'id': response['id']?.toString(),
       'name': response['name'],
-    };
-  }
-
-
-  // NEW helper: fetch a list row by id (used by detail screen to get authoritative owner & name)
-  Future<Map<String, dynamic>?> getListById(int listId) async {
-    final response = await _client
-        .from('lists')
-        .select('id, name, owner_id')
-        .eq('id', listId)
-        .maybeSingle(); // maybeSingle returns null if not found
-    if (response == null) return null;
-    return {
-      'id': response['id']?.toString(),
-      'name': response['name'],
-      'owner_id': response['owner_id']?.toString(),
     };
   }
 
