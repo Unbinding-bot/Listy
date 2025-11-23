@@ -1,11 +1,11 @@
-
-```dart name=lib/screens/list_detail_screen.dart url=https://github.com/Unbinding-bot/Listy/blob/main/lib/screens/list_detail_screen.dart
 // lib/screens/list_detail_screen.dart
-// Fixes applied:
-// - Single input box (moved into bottom bar) — removed duplicate input in body
-// - Restored size/font controls and formatting buttons (font family & color quick menu)
-// - Preserves animated incremental sync behavior for members & items (from prior merge)
-// - Ensures bottom bars (normal vs selection) show the expected controls
+// Cleaned & merged ListDetailScreen
+// - Removed accidental markdown/backticks injected into the file
+// - Restored all dialog methods and helper functions referenced by the class
+// - Keeps incremental item diffs, animated members list, polling every 1s (can be changed)
+// - Single input moved to bottom bar; selection and formatting controls restored
+//
+// Replace your current lib/screens/list_detail_screen.dart with this file (no markdown fences).
 
 import 'dart:async';
 import 'package:flutter/material.dart';
@@ -27,7 +27,7 @@ class DrawingScreen extends StatelessWidget {
 class ListDetailScreen extends StatefulWidget {
   final String listId;
   final String listName;
-  final String ownerId;
+  final String ownerId; // legacy/optional - used optimistically until authoritative role loads
 
   const ListDetailScreen({
     super.key,
@@ -45,27 +45,41 @@ class _ListDetailScreenState extends State<ListDetailScreen> with TickerProvider
   final TextEditingController _addItemController = TextEditingController();
   final FocusNode _addItemFocusNode = FocusNode();
 
+  // Items (kept in order)
   List<Map<String, dynamic>> _items = [];
+
+  // Multi-selection
   final List<int> _selectedItemIds = [];
   bool get isSelecting => _selectedItemIds.isNotEmpty;
 
+  // UI states
   double _currentFontSize = 16.0;
   bool _isBoldSelected = false;
   bool _isItalicSelected = false;
   String _selectedFontFamily = 'Default';
   Color _selectedFontColor = Colors.black;
-
   late String _localListName;
+
+  // Ownership/role
   String _currentUserId = '';
   bool _isCurrentUserOwner = false;
 
+  // Members and AnimatedList
   final GlobalKey<AnimatedListState> _membersListKey = GlobalKey<AnimatedListState>();
   List<Map<String, dynamic>> _members = [];
   bool _membersLoaded = false;
+
+  // Poll timer
   Timer? _refreshTimer;
+
+  // Items subscription
   StreamSubscription<List<Map<String, dynamic>>>? _itemsSub;
 
-  bool _idsEqual(dynamic a, dynamic b) => a != null && b != null && a.toString() == b.toString();
+  // Helper to compare IDs
+  bool _idsEqual(dynamic a, dynamic b) {
+    if (a == null || b == null) return false;
+    return a.toString() == b.toString();
+  }
 
   @override
   void initState() {
@@ -74,14 +88,15 @@ class _ListDetailScreenState extends State<ListDetailScreen> with TickerProvider
     _currentUserId = dbService.currentUser?.id ?? '';
     _isCurrentUserOwner = _idsEqual(widget.ownerId, _currentUserId);
 
-    // items realtime
+    // Subscribe to items realtime stream and apply minimal diffs
     _itemsSub = dbService.getItemsStream(int.parse(widget.listId)).listen((data) {
       _applyItemDiffs(data);
-    });
+    }, onError: (_) {});
 
+    // Initial authoritative load
     _initOwnershipAndName();
 
-    // members polling (keeps lightweight)
+    // Immediate load of members & role and start polling
     _refreshMembers();
     _refreshRole();
     _refreshTimer = Timer.periodic(const Duration(seconds: 1), (_) {
@@ -116,12 +131,15 @@ class _ListDetailScreenState extends State<ListDetailScreen> with TickerProvider
           if (mounted) _showEditTitleDialog();
         });
       }
-    } catch (_) {}
+    } catch (_) {
+      // ignore
+    }
   }
 
-  // Minimal diffs for items
+  // --- Items incremental update (minimal diffs) ---
   void _applyItemDiffs(List<Map<String, dynamic>> newSnapshot) {
     if (!mounted) return;
+
     final oldById = {for (var it in _items) it['id']: it};
     final newById = {for (var it in newSnapshot) it['id']: it};
 
@@ -142,11 +160,15 @@ class _ListDetailScreenState extends State<ListDetailScreen> with TickerProvider
     if (removedIds.isEmpty && addedIds.isEmpty && updatedIds.isEmpty) return;
 
     setState(() {
-      if (removedIds.isNotEmpty) _items.removeWhere((it) => removedIds.contains(it['id']));
+      if (removedIds.isNotEmpty) {
+        _items.removeWhere((it) => removedIds.contains(it['id']));
+      }
+
       for (final id in updatedIds) {
         final idx = _items.indexWhere((it) => it['id'] == id);
         if (idx != -1) _items[idx] = newById[id]!;
       }
+
       for (final newItem in newSnapshot) {
         final id = newItem['id'];
         if (!oldById.containsKey(id)) {
@@ -163,6 +185,7 @@ class _ListDetailScreenState extends State<ListDetailScreen> with TickerProvider
           _items.insert(insertIndex, newItem);
         }
       }
+
       _items.sort((a, b) {
         final ia = newSnapshot.indexWhere((e) => e['id'] == a['id']);
         final ib = newSnapshot.indexWhere((e) => e['id'] == b['id']);
@@ -171,6 +194,7 @@ class _ListDetailScreenState extends State<ListDetailScreen> with TickerProvider
     });
   }
 
+  // --- Polling members & applying minimal changes with animations ---
   Future<void> _refreshMembers() async {
     try {
       final newMembers = await dbService.getListMembersWithProfilesAndRoles(int.parse(widget.listId));
@@ -179,15 +203,21 @@ class _ListDetailScreenState extends State<ListDetailScreen> with TickerProvider
       final oldIds = _members.map((m) => m['id']?.toString()).toList();
       final newIds = newMembers.map((m) => m['id']?.toString()).toList();
 
+      // removals
       final removedIds = oldIds.where((id) => id != null && !newIds.contains(id)).toList().cast<String>();
       for (final rid in removedIds) {
         final idx = _members.indexWhere((m) => _idsEqual(m['id'], rid));
         if (idx != -1) {
-          final removed = _members.removeAt(idx);
-          _membersListKey.currentState?.removeItem(idx, (ctx, anim) => _buildMemberTileAnimated(removed, anim, removing: true), duration: const Duration(milliseconds: 300));
+          final removedItem = _members.removeAt(idx);
+          _membersListKey.currentState?.removeItem(
+            idx,
+            (context, animation) => _buildMemberTileAnimated(removedItem, animation, removing: true),
+            duration: const Duration(milliseconds: 300),
+          );
         }
       }
 
+      // updates
       for (final nm in newMembers) {
         final id = nm['id']?.toString();
         if (id == null) continue;
@@ -201,11 +231,12 @@ class _ListDetailScreenState extends State<ListDetailScreen> with TickerProvider
         }
       }
 
+      // additions (in authoritative order)
       for (int i = 0; i < newMembers.length; i++) {
         final nm = newMembers[i];
         final id = nm['id']?.toString();
         if (id == null) continue;
-        if (!_members.any((m) => _idsEqual(m['id'], id))) {
+        if (!_members.any((x) => _idsEqual(x['id'], id))) {
           final insertIndex = _determineInsertIndexForMember(newMembers, id);
           _members.insert(insertIndex, nm);
           _membersListKey.currentState?.insertItem(insertIndex, duration: const Duration(milliseconds: 300));
@@ -214,7 +245,9 @@ class _ListDetailScreenState extends State<ListDetailScreen> with TickerProvider
 
       if (!_membersLoaded) setState(() => _membersLoaded = true);
       else setState(() {});
-    } catch (_) {}
+    } catch (_) {
+      // ignore polling errors
+    }
   }
 
   int _determineInsertIndexForMember(List<Map<String, dynamic>> authoritativeList, String memberId) {
@@ -236,7 +269,9 @@ class _ListDetailScreenState extends State<ListDetailScreen> with TickerProvider
         _currentUserId = dbService.currentUser?.id ?? '';
         _isCurrentUserOwner = (role == 'owner') || _idsEqual(widget.ownerId, _currentUserId);
       });
-    } catch (_) {}
+    } catch (_) {
+      // ignore
+    }
   }
 
   // --- Selection helpers ---
@@ -248,6 +283,7 @@ class _ListDetailScreenState extends State<ListDetailScreen> with TickerProvider
       });
       return;
     }
+
     final selectedItems = _items.where((item) => _selectedItemIds.contains(item['id'])).toList();
     if (selectedItems.isEmpty) return;
     final allBold = selectedItems.every((item) => item['is_bold'] == true);
@@ -275,12 +311,12 @@ class _ListDetailScreenState extends State<ListDetailScreen> with TickerProvider
 
   // --- CRUD helpers ---
   Future<void> _addNewItem(String title) async {
-    final t = title.trim();
-    if (t.isEmpty) return;
+    final trimmedTitle = title.trim();
+    if (trimmedTitle.isEmpty) return;
     try {
-      await dbService.addItem(int.parse(widget.listId), t);
+      await dbService.addItem(int.parse(widget.listId), trimmedTitle);
       _addItemController.clear();
-      _addItemFocusNode.requestFocus();
+      _addItemFocusNode.requestFocus(); // keep focus for quick entry
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to add item: $e')));
     }
@@ -409,7 +445,81 @@ class _ListDetailScreenState extends State<ListDetailScreen> with TickerProvider
     }
   }
 
-  // --- AppBars / bottom bars ---
+  // --- Dialogs for editing name, members, sharing ---
+  void _showEditTitleDialog() {
+    final titleController = TextEditingController(text: _localListName);
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Edit List Name'),
+        content: TextField(controller: titleController, decoration: const InputDecoration(hintText: 'Enter new list name')),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () { Navigator.pop(context); _updateListName(titleController.text); }, child: const Text('Save')),
+        ],
+      ),
+    );
+  }
+
+  void _showShareDialog() {
+    final shareController = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Share "${_localListName}"'),
+        content: TextField(controller: shareController, decoration: const InputDecoration(hintText: 'Enter user\'s email address')),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () async { Navigator.pop(context); await _addMember(shareController.text); }, child: const Text('Share')),
+        ],
+      ),
+    );
+  }
+
+  void _showMembersDialog() {
+    final isOwner = _isCurrentUserOwner;
+    final key = UniqueKey();
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        key: key,
+        title: const Text('List Members'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: _membersLoaded
+              ? AnimatedList(
+                  key: _membersListKey,
+                  initialItemCount: _members.length,
+                  shrinkWrap: true,
+                  itemBuilder: (context, index, animation) => _buildMemberTileAnimated(_members[index], animation),
+                )
+              : const Center(child: CircularProgressIndicator()),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close')),
+          if (isOwner)
+            ElevatedButton.icon(icon: const Icon(Icons.add), label: const Text('Add Member'), onPressed: () { Navigator.pop(context); _showAddMemberDialog(); }),
+        ],
+      ),
+    );
+  }
+
+  void _showAddMemberDialog() {
+    final tc = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Add Member to "${_localListName}"'),
+        content: TextField(controller: tc, decoration: const InputDecoration(hintText: 'Enter user\'s email address')),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () async { Navigator.pop(context); await _addMember(tc.text); }, child: const Text('Add')),
+        ],
+      ),
+    );
+  }
+
+  // --- AppBar & Bottom Bars ---
   AppBar _buildSelectionAppBar() {
     return AppBar(
       title: Text('${_selectedItemIds.length} Items Selected'),
@@ -435,13 +545,11 @@ class _ListDetailScreenState extends State<ListDetailScreen> with TickerProvider
     );
   }
 
-  // Normal bottom bar now contains the single input + size/font controls
   Widget _buildNormalBottomBar() {
     return BottomAppBar(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 8.0),
         child: Row(children: [
-          // Font family selector
           PopupMenuButton<String>(
             tooltip: 'Font Family',
             initialValue: _selectedFontFamily,
@@ -450,14 +558,8 @@ class _ListDetailScreenState extends State<ListDetailScreen> with TickerProvider
             child: Padding(padding: const EdgeInsets.symmetric(horizontal: 8.0), child: Icon(Icons.font_download)),
           ),
 
-          // Font size toggle
-          IconButton(
-            icon: const Icon(Icons.format_size),
-            onPressed: () => setState(() => _currentFontSize = _currentFontSize == 16.0 ? 20.0 : 16.0),
-            tooltip: 'Toggle Font Size',
-          ),
+          IconButton(icon: const Icon(Icons.format_size), onPressed: () => setState(() => _currentFontSize = _currentFontSize == 16.0 ? 20.0 : 16.0), tooltip: 'Toggle Font Size'),
 
-          // Color quick menu
           PopupMenuButton<Color>(
             tooltip: 'Font Color',
             onSelected: (c) => setState(() => _selectedFontColor = c),
@@ -469,16 +571,11 @@ class _ListDetailScreenState extends State<ListDetailScreen> with TickerProvider
             child: Padding(padding: const EdgeInsets.symmetric(horizontal: 8.0), child: Icon(Icons.color_lens, color: _selectedFontColor)),
           ),
 
-          // Expanded input for new item (single source of truth)
           Expanded(
             child: TextField(
               controller: _addItemController,
               focusNode: _addItemFocusNode,
-              decoration: InputDecoration(
-                hintText: "New item...",
-                suffixIcon: IconButton(icon: const Icon(Icons.add), onPressed: () => _addNewItem(_addItemController.text)),
-                border: const OutlineInputBorder(),
-              ),
+              decoration: InputDecoration(hintText: 'New item...', suffixIcon: IconButton(icon: const Icon(Icons.add), onPressed: () => _addNewItem(_addItemController.text)), border: const OutlineInputBorder()),
               onSubmitted: (v) => _addNewItem(v),
             ),
           ),
@@ -490,7 +587,6 @@ class _ListDetailScreenState extends State<ListDetailScreen> with TickerProvider
     );
   }
 
-  // Selection bottom bar (formatting + bulk actions)
   Widget _buildSelectionBottomBar() {
     final isSingle = _selectedItemIds.length == 1;
     final actions = isSingle
@@ -505,25 +601,12 @@ class _ListDetailScreenState extends State<ListDetailScreen> with TickerProvider
               await _updateSelectedItemsStyle({'is_italic': newState});
               _updateFormattingBarState();
             }),
-            PopupMenuButton<String>(
-              icon: const Icon(Icons.font_download),
-              onSelected: (f) async {
-                await _updateSelectedItemsStyle({'font_family': f});
-              },
-              itemBuilder: (ctx) => ['Default', 'Serif', 'Monospace', 'Sans'].map((f) => PopupMenuItem(value: f, child: Text(f))).toList(),
-            ),
-            PopupMenuButton<Color>(
-              icon: const Icon(Icons.color_lens),
-              onSelected: (c) async {
-                final hex = c.value.toRadixString(16).padLeft(8, '0').substring(2); // 'RRGGBB'
-                await _updateSelectedItemsStyle({'text_color': hex});
-              },
-              itemBuilder: (ctx) => [
-                PopupMenuItem(value: Colors.black, child: Row(children: [const Icon(Icons.circle, color: Colors.black), const SizedBox(width: 8), const Text('Black')])),
-                PopupMenuItem(value: Colors.red, child: Row(children: [const Icon(Icons.circle, color: Colors.red), const SizedBox(width: 8), const Text('Red')])),
-                PopupMenuItem(value: Colors.blue, child: Row(children: [const Icon(Icons.circle, color: Colors.blue), const SizedBox(width: 8), const Text('Blue')])),
-              ],
-            ),
+            PopupMenuButton<String>(icon: const Icon(Icons.font_download), onSelected: (f) async { await _updateSelectedItemsStyle({'font_family': f}); }, itemBuilder: (ctx) => ['Default', 'Serif', 'Monospace', 'Sans'].map((f) => PopupMenuItem(value: f, child: Text(f))).toList()),
+            PopupMenuButton<Color>(icon: const Icon(Icons.color_lens), onSelected: (c) async { final hex = c.value.toRadixString(16).padLeft(8, '0').substring(2); await _updateSelectedItemsStyle({'text_color': hex}); }, itemBuilder: (ctx) => [
+              PopupMenuItem(value: Colors.black, child: Row(children: [const Icon(Icons.circle, color: Colors.black), const SizedBox(width: 8), const Text('Black')])),
+              PopupMenuItem(value: Colors.red, child: Row(children: [const Icon(Icons.circle, color: Colors.red), const SizedBox(width: 8), const Text('Red')])),
+              PopupMenuItem(value: Colors.blue, child: Row(children: [const Icon(Icons.circle, color: Colors.blue), const SizedBox(width: 8), const Text('Blue')])),
+            ]),
           ]
         : <Widget>[
             IconButton(icon: const Icon(Icons.check_box), onPressed: () => _updateSelectedItems(true)),
@@ -531,15 +614,9 @@ class _ListDetailScreenState extends State<ListDetailScreen> with TickerProvider
             IconButton(icon: const Icon(Icons.delete), onPressed: _deleteSelectedItems),
           ];
 
-    return BottomAppBar(
-      child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [
-        ...actions,
-        IconButton(icon: const Icon(Icons.cancel), onPressed: _clearSelection),
-      ]),
-    );
+    return BottomAppBar(child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [...actions, IconButton(icon: const Icon(Icons.cancel), onPressed: _clearSelection)]));
   }
 
-  // Item row with AnimatedSwitcher for subtle updates
   Widget _buildItemRow(Map<String, dynamic> item) {
     final itemId = item['id'] as int;
     final isCompleted = item['is_completed'] as bool? ?? false;
@@ -557,10 +634,7 @@ class _ListDetailScreenState extends State<ListDetailScreen> with TickerProvider
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 12.0),
           child: Row(children: [
-            GestureDetector(
-              onTap: _selectedItemIds.isNotEmpty ? () => _toggleSelection(itemId) : () async => await dbService.updateItem(itemId, {'is_completed': !isCompleted}),
-              child: Padding(padding: const EdgeInsets.symmetric(horizontal: 16.0), child: Icon(isCompleted ? Icons.check_box : Icons.check_box_outline_blank, color: isCompleted ? Theme.of(context).colorScheme.primary : Colors.grey)),
-            ),
+            GestureDetector(onTap: _selectedItemIds.isNotEmpty ? () => _toggleSelection(itemId) : () async => await dbService.updateItem(itemId, {'is_completed': !isCompleted}), child: Padding(padding: const EdgeInsets.symmetric(horizontal: 16.0), child: Icon(isCompleted ? Icons.check_box : Icons.check_box_outline_blank, color: isCompleted ? Theme.of(context).colorScheme.primary : Colors.grey))),
             Expanded(
               child: TextFormField(
                 initialValue: item['title'] as String,
@@ -624,6 +698,5 @@ class _ListDetailScreenState extends State<ListDetailScreen> with TickerProvider
     }
   }
 }
-
 // yk this goes to show how much I like you and how much I want to do fun stuff with you
 // haha lol you probably wont be reading this though
