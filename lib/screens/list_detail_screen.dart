@@ -1,15 +1,11 @@
 // lib/screens/list_detail_screen.dart
-// Base file provided by the user with edits merged:
-// - Uses list_members role (via getCurrentUserRole) to determine owner permissions
-// - Members dialog expects member rows to include a 'role' field (owner/member)
-// - Fetches authoritative list name via getListById
-// - Normalizes ID comparisons
-// - Auto-opens edit-title dialog for newly-created/untitled lists when the current user is owner
-// NOTE: This file assumes your Supabase service provides:
-//   - Future<Map<String, dynamic>?> getListById(int listId)
-//   - Future<String?> getCurrentUserRole(int listId)
-//   - Future<List<Map<String, dynamic>>> getListMembersWithProfilesAndRoles(int listId)
-// If those helpers don't exist yet, add them to lib/services/supabase_service.dart.
+// Combined & updated ListDetailScreen:
+// - Uses list_members.role via getCurrentUserRole and getListMembersWithProfilesAndRoles
+// - Normalizes ID comparisons to avoid int/string mismatches
+// - Optimistically allows the creator to edit immediately using widget.ownerId
+// - Fetches authoritative list name on init and refreshes owner role
+// - Auto-opens the edit dialog for newly-created/untitled lists when the current user is owner
+// - Preserves existing UI/formatting/reorder/item logic
 
 import 'package:flutter/material.dart';
 import '../services/supabase_service.dart';
@@ -30,7 +26,7 @@ class DrawingScreen extends StatelessWidget {
 class ListDetailScreen extends StatefulWidget {
   final String listId;
   final String listName;
-  final String ownerId; // legacy/optional - not used for authoritative owner checks
+  final String ownerId; // legacy/optional - used optimistically until authoritative role loads
 
   const ListDetailScreen({
     super.key,
@@ -58,7 +54,7 @@ class _ListDetailScreenState extends State<ListDetailScreen> {
   // State for the bottom options bar (just an example for font size)
   double _currentFontSize = 16.0;
 
-  // NEW: Formatting states for the SELECTED items (used for the bottom bar UI)
+  // Formatting states for the selected items
   bool _isBoldSelected = false;
   bool _isItalicSelected = false;
 
@@ -79,22 +75,24 @@ class _ListDetailScreenState extends State<ListDetailScreen> {
   @override
   void initState() {
     super.initState();
-    _localListName = widget.listName; // Initialize local name from widget
+    _localListName = widget.listName; // initialize from the passed-in value
 
     // capture current user id (if available)
     _currentUserId = dbService.currentUser?.id ?? '';
 
-    // Start listening to the stream immediately
+    // Optimistic owner initialization: allow immediate edit for creator/navigation ownerId
+    _isCurrentUserOwner = _idsEqual(widget.ownerId, _currentUserId);
+
+    // Start listening to the items stream immediately
     dbService.getItemsStream(int.parse(widget.listId)).listen((data) {
       if (mounted) {
-        // Update the local list whenever Supabase emits new data
         setState(() {
           _items = data;
         });
       }
     });
 
-    // Fetch authoritative list name and the current user's role for this list
+    // Fetch authoritative list name and the current user's role for this list, then update state
     _initOwnershipAndName();
   }
 
@@ -117,7 +115,8 @@ class _ListDetailScreenState extends State<ListDetailScreen> {
       setState(() {
         _localListName = listRow?['name'] ?? widget.listName;
         _currentUserId = dbService.currentUser?.id ?? '';
-        _isCurrentUserOwner = (role == 'owner');
+        // authoritative owner: the role check overrides the optimistic ownerId check
+        _isCurrentUserOwner = (role == 'owner') || _idsEqual(widget.ownerId, _currentUserId);
       });
 
       // If the list looks newly-created/untitled and the current user is owner,

@@ -33,35 +33,35 @@ class SupabaseService {
   // RPC to safely create a list and add the creator as a member (Fixes RLS recursion)
   Future<Map<String, dynamic>> createNewList(String listName) async {
     final currentUserId = currentUser?.id;
-    if (currentUserId == null) {
-      throw Exception('User not logged in.');
-    }
+    if (currentUserId == null) throw Exception('User not logged in.');
 
-    // Calls the 'create_list_and_add_member' SQL function which returns the new list id
-    final response = await _client.rpc(
-      'create_list_and_add_member',
-      params: {'list_name': listName},
-    );
+    // Call your SQL function which creates the list and creates the list_members row
+    final response = await _client.rpc('create_list_and_add_member', params: {'list_name': listName});
 
     final listId = response['id'];
-    if (listId == null) {
-      throw Exception('Failed to create list.');
-    }
+    if (listId == null) throw Exception('Failed to create list.');
 
-    // Fetch the authoritative list row from the lists table so the client has the real owner_id and name
-    final listRow = await _client
-        .from('lists')
-        .select('id, name, owner_id')
-        .eq('id', listId)
-        .single();
+    // Fetch authoritative list row to get name and any other fields
+    final listRow = await _client.from('lists').select('id, name').eq('id', listId).maybeSingle();
 
-    // Return the authoritative row (convert id to string to make later usage simpler)
     return {
-      'id': listRow['id']?.toString(),
-      'name': listRow['name'],
-      'owner_id': listRow['owner_id']?.toString(),
+      'id': listRow?['id']?.toString() ?? listId.toString(),
+      'name': listRow?['name'] ?? listName,
+      // owner_id is not stored on lists in your schema; leave empty or include current user id
+      'owner_id': currentUserId,
     };
   }
+
+  /// Fetch list row by id (used to get an authoritative name)
+  Future<Map<String, dynamic>?> getListById(int listId) async {
+    final response = await _client.from('lists').select('id, name').eq('id', listId).maybeSingle();
+    if (response == null) return null;
+    return {
+      'id': response['id']?.toString(),
+      'name': response['name'],
+    };
+  }
+
 
   // NEW helper: fetch a list row by id (used by detail screen to get authoritative owner & name)
   Future<Map<String, dynamic>?> getListById(int listId) async {
@@ -236,17 +236,13 @@ class SupabaseService {
 
   Future<List<Map<String, dynamic>>> getListMembersWithProfilesAndRoles(int listId) async {
     try {
-      // Select the role from list_members and the nested profile fields from profiles.
-      // We alias the nested profile object as 'user' so it's easier to normalize.
       final response = await _client
-        .from('list_members')
-        .select('role, user:profiles(id, username, email)')
-        .eq('list_id', listId);
+          .from('list_members')
+          .select('role, user:profiles(id, username, email)')
+          .eq('list_id', listId);
 
-      // If no data returned, return empty list
       if (response == null) return <Map<String, dynamic>>[];
 
-      // Normalize the result into a predictable shape
       final rows = response as List<dynamic>;
       final members = <Map<String, dynamic>>[];
 
@@ -261,13 +257,7 @@ class SupabaseService {
           'role': role ?? 'member',
         });
       }
-
       return members;
-    } on PostgrestException catch (e) {
-      // Log or surface the Postgrest error as appropriate for your app.
-      // Returning empty list so the UI won't crash; you can also rethrow if you'd prefer.
-      // print('getListMembersWithProfilesAndRoles error: ${e.message}');
-      return <Map<String, dynamic>>[];
     } catch (_) {
       return <Map<String, dynamic>>[];
     }

@@ -1,4 +1,10 @@
 // lib/screens/home_screen.dart
+//
+// Home screen with list stream, selection, reordering, and FAB to create+open new lists.
+// Changes applied:
+// - Normalize and pass ownerId when navigating to ListDetailScreen (use returned owner_id from create flow if available).
+// - Ensure the FAB waits for createNewList and navigates into the new list using normalized id/name/ownerId.
+// - Keep selection/reorder UX intact.
 
 import 'package:flutter/material.dart';
 import '../services/supabase_service.dart';
@@ -152,7 +158,11 @@ class _HomeScreenState extends State<HomeScreen> {
         onTap: isSelecting
             ? () => _toggleSelection(listId)
             : () {
-                final ownerId = (list['owner_id'] as String?) ?? 'unknown_owner';
+                // Normalize ownerId if present on the list row; otherwise pass empty string
+                final ownerId = (list.containsKey('owner_id') && list['owner_id'] != null)
+                    ? list['owner_id'].toString()
+                    : '';
+
                 Navigator.push(
                   context,
                   MaterialPageRoute(
@@ -431,20 +441,29 @@ class _HomeScreenState extends State<HomeScreen> {
               try {
                 final newList = await dbService.createNewList("Untitled List");
 
+                // Normalize returned values
+                final newListId = (newList['id'] != null) ? newList['id'].toString() : '0';
+                final newListName = (newList['name'] as String?) ?? 'Untitled List';
+                // Prefer owner_id returned by createNewList; fallback to current user's id if available
+                final returnedOwnerId = newList['owner_id']?.toString();
+                final newOwnerId = returnedOwnerId != null && returnedOwnerId.isNotEmpty
+                    ? returnedOwnerId
+                    : dbService.currentUser?.id ?? '';
+
                 if (context.mounted) {
                   Navigator.push(
                     context,
                     MaterialPageRoute(
                       builder: (_) => ListDetailScreen(
-                        listId: newList['id']?.toString() ?? '0',
-                        listName: newList['name'] ?? 'Untitled List',
-                        ownerId: (newList['owner_id'] != null) ? newList['owner_id'].toString() : '',
+                        listId: newListId,
+                        listName: newListName,
+                        ownerId: newOwnerId,
                       ),
                     ),
                   );
 
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('List created successfully!')),
+                    const SnackBar(content: Text('List created and opened.')),
                   );
                 }
               } catch (e) {
