@@ -153,13 +153,17 @@ class _HomeScreenState extends State<HomeScreen> {
                         onTap: isSelecting
                             ? () => _toggleSelection(listId)
                             : () {
+                                // --- BUG FIX APPLIED HERE ---
+                                // Safely read owner_id, providing a fallback string if null
+                                final ownerId = (list['owner_id'] as String?) ?? 'unknown_owner';
+
                                 Navigator.push(
                                   context,
                                   MaterialPageRoute(
                                     builder: (_) => ListDetailScreen(
                                       listId: listId.toString(), 
                                       listName: listName,
-                                      ownerId: list['owner_id'] as String,
+                                      ownerId: ownerId, // Use the safely checked ownerId
                                     ),
                                   ),
                                 );
@@ -316,9 +320,9 @@ class _HomeScreenState extends State<HomeScreen> {
                 context,
                 MaterialPageRoute(
                   builder: (_) => ListDetailScreen(
-                    listId: newList['id'].toString(), 
-                    listName: newList['name'],
-                    ownerId: newList['owner_id'] as String,
+                    listId: newList['id']?.toString() ?? '0', // Safely check ID
+                    listName: newList['name'] ?? 'Untitled List', // Safely check Name
+                    ownerId: (newList['owner_id'] as String?) ?? 'unknown_owner', // Safely check Owner ID
                   ),
                 ),
               );

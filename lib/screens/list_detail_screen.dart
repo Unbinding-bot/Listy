@@ -20,6 +20,7 @@ class ListDetailScreen extends StatefulWidget {
   final String listId;
   final String listName;
   final String ownerId; // <--- FIX 1: NEW REQUIRED FIELD FOR OWNER CHECK
+  
 
   const ListDetailScreen({
     super.key, 
@@ -613,7 +614,7 @@ void _showMembersDialog() {
   final String listOwnerId = widget.ownerId; 
 
   final currentUserId = dbService.currentUser?.id;
-  
+
   final bool isCurrentUserOwner = currentUserId == listOwnerId;
 
   showDialog(
