@@ -635,7 +635,7 @@ void _showMembersDialog() {
               final currentUserId = dbService.currentUser?.id;
 
               // Determine if the current user viewing the list is the owner
-              final bool isCurrentUserOwner = currentUserId == listOwnerId;
+              final bool isCurrentUserOwner = currentUserId == widget.ownerId;
 
               return ListView.builder(
                 shrinkWrap: true,
