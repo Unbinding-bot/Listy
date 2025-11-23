@@ -444,7 +444,29 @@ class _ListDetailScreenState extends State<ListDetailScreen> with TickerProvider
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to transfer ownership: $e')));
     }
   }
+  Future<void> _updateListName(String newName) async {
+    final trimmedName = newName.trim();
+    if (trimmedName.isEmpty || trimmedName == _localListName) return;
 
+    try {
+      await dbService.updateListName(int.parse(widget.listId), trimmedName);
+
+      if (!mounted) return;
+      setState(() {
+        _localListName = trimmedName;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('List name updated successfully.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to update list name: ${e.toString()}')),
+      );
+    }
+  }
+  
   // --- Dialogs for editing name, members, sharing ---
   void _showEditTitleDialog() {
     final titleController = TextEditingController(text: _localListName);
