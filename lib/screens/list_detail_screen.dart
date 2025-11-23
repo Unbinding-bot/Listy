@@ -3,7 +3,8 @@
 // - Uses authoritative list data fetched from the DB after creation/opening
 // - Normalizes ID comparisons to avoid int/string mismatches
 // - Uses role lookup to determine if current user is owner (allows editing, adding members)
-// - Preserves existing UI/formatting/reorder/item logic from your current file
+// - Automatically prompts to edit the title when a newly-created "Untitled" list opens and the current user is the owner
+// - Preserves existing UI/formatting/reorder/item logic from your original file
 
 import 'package:flutter/material.dart';
 import '../services/supabase_service.dart';
@@ -116,6 +117,15 @@ class _ListDetailScreenState extends State<ListDetailScreen> {
         _currentUserId = dbService.currentUser?.id ?? '';
         _isCurrentUserOwner = (role == 'owner') || _idsEqual(_authoritativeOwnerId, _currentUserId);
       });
+
+      // If the list looks newly-created/untitled and the current user is owner,
+      // prompt them to rename it. Use post-frame callback so dialogs open safely.
+      if (_isCurrentUserOwner &&
+          (_localListName.trim().isEmpty || _localListName.toLowerCase().contains('untitled'))) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _showEditTitleDialog();
+        });
+      }
     } catch (_) {
       // swallow errors; UI will continue using widget-provided fallback values
     }
@@ -604,39 +614,6 @@ class _ListDetailScreenState extends State<ListDetailScreen> {
 
   // --- UI Builders ---
 
-  Widget _buildNormalAppBar() {
-    return AppBar(
-      title: GestureDetector(
-        onTap: _isCurrentUserOwner ? _showEditTitleDialog : null, // Only allow owner to edit
-        child: Text(
-          _localListName, // <--- Using local name
-          style: TextStyle(
-            // Optional: change style to indicate editable/non-editable
-            decoration: _isCurrentUserOwner ? TextDecoration.underline : null,
-            decorationStyle: TextDecorationStyle.dashed,
-          ),
-        ),
-      ),
-      actions: [
-        IconButton(
-          icon: const Icon(Icons.brush),
-          onPressed: () {
-            Navigator.push(context, MaterialPageRoute(builder: (_) => const DrawingScreen()));
-          },
-        ),
-        IconButton(
-          icon: const Icon(Icons.people), // Updated icon
-          onPressed: _showMembersDialog, // New handler
-        ),
-        IconButton(
-          icon: const Icon(Icons.share),
-          onPressed: _showShareDialog,
-        ),
-      ],
-    );
-  }
-
-  // FIX: Explicitly set return type to AppBar (which implements PreferredSizeWidget)
   AppBar _buildSelectionAppBar() {
     return AppBar(
       title: Text('${_selectedItemIds.length} Items Selected'),
@@ -661,6 +638,38 @@ class _ListDetailScreenState extends State<ListDetailScreen> {
           icon: const Icon(Icons.delete),
           tooltip: 'Delete Selected',
           onPressed: _deleteSelectedItems,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildNormalAppBar() {
+    return AppBar(
+      title: GestureDetector(
+        onTap: _isCurrentUserOwner ? _showEditTitleDialog : null, // Only allow owner to edit
+        child: Text(
+          _localListName, // <--- Using local name
+          style: TextStyle(
+            // Optional: change style to indicate editable/non-editable
+            decoration: _isCurrentUserOwner ? TextDecoration.underline : null,
+            decorationStyle: TextDecorationStyle.dashed,
+          ),
+        ),
+      ),
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.brush),
+          onPressed: () {
+            Navigator.push(context, MaterialPageRoute(builder: (_) => const DrawingScreen()));
+          },
+        ),
+        IconButton(
+          icon: const Icon(Icons.people),
+          onPressed: _showMembersDialog,
+        ),
+        IconButton(
+          icon: const Icon(Icons.share),
+          onPressed: _showShareDialog,
         ),
       ],
     );
@@ -803,8 +812,8 @@ class _ListDetailScreenState extends State<ListDetailScreen> {
                         final isBold = item['is_bold'] as bool? ?? false;
                         final isItalic = item['is_italic'] as bool? ?? false;
                         // Default color to theme if 'text_color' is missing or null
-                        final colorHex = item['text_color'] as String?; // Allow null/missing
-                        final itemColor = _hexToColor(colorHex); // Uses theme default if hex is null/invalid
+                        final colorHex = item['text_color'] as String?;
+                        final itemColor = _hexToColor(colorHex);
 
                         // Wrap each item in a LongPress and Tap Detector
                         return GestureDetector(
@@ -815,7 +824,7 @@ class _ListDetailScreenState extends State<ListDetailScreen> {
                           child: Container(
                             color: isSelected ? Theme.of(context).colorScheme.primary.withOpacity(0.1) : null,
                             child: Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 4.0),
+                              padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 12.0),
                               child: Row(
                                 children: [
                                   // LEFT SIDE: Selection/Checkbox Toggling Zone
@@ -851,8 +860,6 @@ class _ListDetailScreenState extends State<ListDetailScreen> {
                                       style: TextStyle(
                                         fontSize: _currentFontSize,
                                         decoration: isCompleted ? TextDecoration.lineThrough : null,
-
-                                        // NEW STYLING & FIX FOR DARK MODE TEXT COLOR
                                         color: isCompleted ? itemColor.withOpacity(0.6) : itemColor,
                                         fontWeight: isBold ? FontWeight.bold : FontWeight.normal,
                                         fontStyle: isItalic ? FontStyle.italic : FontStyle.normal,
@@ -910,6 +917,7 @@ class _ListDetailScreenState extends State<ListDetailScreen> {
     );
   }
 }
+
 
 //yk this goes to show how much I like you and how much I want to do fun stuff with you
 //haha lol you probably wont be reading this though
