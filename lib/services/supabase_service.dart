@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:rxdart/rxdart.dart'; // REQUIRED: Add this dependency to your pubspec.yaml
-import 'package:postgrest/postgrest.dart'; // For PostgrestException
 
 class SupabaseService {
   final _client = Supabase.instance.client;
@@ -17,24 +16,25 @@ class SupabaseService {
 
   // Stream to fetch all lists owned by or shared with the current user
   Stream<List<Map<String, dynamic>>> getMyLists() {
-    final curUserId = currentUser?.id;
-    if (curUserId == null) {
+    final currentUserId = currentUser?.id;
+    if (currentUserId == null) {
       // Return an empty stream if the user is not logged in
-      return Stream.value(<List<Map<String, dynamic>>>[]);
+      return Stream.value(<Map<String, dynamic>>[]);
     }
 
-    // RLS policy "Members can view list details" handles filtering by membership
+    // FIX: Removed .execute() as it is deprecated for stream builders.
     return _client
         .from('lists')
         .stream(primaryKey: ['id'])
         .order('created_at', ascending: false)
         .map((event) => (event as List<dynamic>).cast<Map<String, dynamic>>());
+    // RLS policy "Members can view list details" handles filtering by membership
   }
 
   // RPC to safely create a list and add the creator as a member (Fixes RLS recursion)
   Future<Map<String, dynamic>> createNewList(String listName) async {
-    final curUserId = currentUser?.id;
-    if (curUserId == null) {
+    final currentUserId = currentUser?.id;
+    if (currentUserId == null) {
       throw Exception('User not logged in.');
     }
 
@@ -44,8 +44,7 @@ class SupabaseService {
       params: {'list_name': listName},
     );
 
-    // The RPC returns JSON with 'id'
-    final listId = response != null ? (response['id'] ?? response['create_list_and_add_member']) : null;
+    final listId = response['id'];
     if (listId == null) {
       throw Exception('Failed to create list.');
     }
@@ -58,7 +57,7 @@ class SupabaseService {
       'id': listRow?['id']?.toString() ?? listId.toString(),
       'name': listRow?['name'] ?? listName,
       // Your schema uses list_members for ownership; return creator id as owner_id for UI convenience.
-      'owner_id': curUserId,
+      'owner_id': currentUserId,
     };
   }
 
@@ -74,14 +73,16 @@ class SupabaseService {
 
   // NEW: Function to update list name
   Future<void> updateListName(int listId, String newName) async {
-    final cur = currentUser?.id;
-    if (cur == null) throw Exception('User not logged in.');
+    final currentUserId = currentUser?.id;
+    if (currentUserId == null) {
+      throw Exception('User not logged in.');
+    }
 
     await _client.from('lists').update({'name': newName}).eq('id', listId);
-    // RLS policy should ensure only owners can perform this update
+    // RLS policy should ensure only owners/members can perform this update
   }
 
-  // delete
+  //delete
   Future<void> deleteList(int listId) async {
     // RLS policy handles security (only owner/member can delete)
     await _client.from('lists').delete().eq('id', listId);
@@ -93,8 +94,10 @@ class SupabaseService {
 
   // Function to add a new item to a list
   Future<void> addItem(int listId, String title) async {
-    final cur = currentUser?.id;
-    if (cur == null) throw Exception('User not logged in.');
+    final currentUserId = currentUser?.id;
+    if (currentUserId == null) {
+      throw Exception('User not logged in.');
+    }
 
     // RLS policy "Members can modify and view items" handles security
     await _client.from('items').insert({
@@ -120,16 +123,20 @@ class SupabaseService {
 
   // Function to update an item's fields (e.g., title, is_completed, formatting)
   Future<void> updateItem(int itemId, Map<String, dynamic> updates) async {
-    final cur = currentUser?.id;
-    if (cur == null) throw Exception('User not logged in.');
+    final currentUserId = currentUser?.id;
+    if (currentUserId == null) {
+      throw Exception('User not logged in.');
+    }
 
     // RLS policy "Members can modify and view items" handles security
     await _client.from('items').update(updates).eq('id', itemId);
   }
 
   Future<void> deleteItem(int itemId) async {
-    final cur = currentUser?.id;
-    if (cur == null) throw Exception('User not logged in.');
+    final currentUserId = currentUser?.id;
+    if (currentUserId == null) {
+      throw Exception('User not logged in.');
+    }
 
     // RLS policy "Members can modify and view items" handles security
     await _client.from('items').delete().eq('id', itemId);
@@ -137,14 +144,9 @@ class SupabaseService {
 
   // List Items Preview
   Future<List<Map<String, dynamic>>> getListItemsPreview(int listId) async {
-    final data = await _client
-        .from('items')
-        .select('title')
-        .eq('list_id', listId)
-        .limit(3) // Get the top 3 items
-        .order('created_at', ascending: true);
+    // FIX: Removed .execute()
+    final data = await _client.from('items').select('title').eq('list_id', listId).limit(3).order('created_at', ascending: true);
 
-    if (data == null) return <Map<String, dynamic>>[];
     return (data as List<dynamic>).cast<Map<String, dynamic>>();
   }
 
@@ -163,12 +165,9 @@ class SupabaseService {
     final userId = currentUserId;
     if (userId == null) return null;
     try {
-      final response = await _client
-          .from('list_members')
-          .select('role')
-          .eq('list_id', listId)
-          .eq('user_id', userId)
-          .maybeSingle();
+      // FIX: Removed .execute()
+      final response = await _client.from('list_members').select('role').eq('list_id', listId).eq('user_id', userId).maybeSingle();
+
       if (response == null) return null;
       return response['role'] as String?;
     } catch (_) {
@@ -176,43 +175,30 @@ class SupabaseService {
     }
   }
 
-  /// Method to fetch the list of member user_ids for a given list
-  Future<List<String>> _getMemberUserIds(int listId) async {
-    final memberIdsResponse = await _client.from('list_members').select('user_id').eq('list_id', listId);
-    if (memberIdsResponse == null) return [];
-    final ids = (memberIdsResponse as List<dynamic>)
-        .map((r) => r['user_id']?.toString())
-        .whereType<String>()
-        .toList();
-    return ids;
-  }
-
-  /// Fetch profiles for a list of user IDs (helper)
-  Future<List<Map<String, dynamic>>> _getProfilesForUserIds(List<String> userIds) async {
-    if (userIds.isEmpty) return [];
-    // The 'in' filter format depends on client; many clients accept .filter('id', 'in', userIds)
-    final profilesResp = await _client.from('profiles').select('id, username, email').filter('id', 'in', userIds);
-    if (profilesResp == null) return [];
-    return (profilesResp as List<dynamic>).cast<Map<String, dynamic>>();
-  }
-
-  // Method to fetch members' profiles (simple two-step approach)
+  /// Method to fetch the current list of members with profiles (NOT real-time)
   Future<List<Map<String, dynamic>>> getListMembersWithProfiles(int listId) async {
-    final memberUids = await _getMemberUserIds(listId);
-    if (memberUids.isEmpty) return [];
-    final profiles = await _getProfilesForUserIds(memberUids);
-    return profiles;
+    // 1. Fetch all user_id UUIDs from the list_members table for the given list.
+    final memberIdsResponse = await _client.from('list_members').select('user_id').eq('list_id', listId);
+
+    // Extract the raw list of UUIDs (Strings)
+    final memberUids = (memberIdsResponse as List).map((row) => row['user_id'] as String).toList();
+
+    if (memberUids.isEmpty) {
+      return [];
+    }
+
+    // 2. Fetch the profile data (username) directly from the profiles table
+    // using the list of UIDs retrieved in step 1.
+    final profiles = await _client.from('profiles').select('id, username').filter('id', 'in', memberUids.toList()); // Safely query all profiles whose ID is in the list
+
+    // Return the list of profiles (e.g., [{'id': '...', 'username': 'user1'}, ...])
+    return (profiles as List).cast<Map<String, dynamic>>();
   }
 
-  /// Fetch list members joined with profiles and include each member's role.
-  /// Returns a List of maps: { 'id', 'username', 'email', 'role' }.
   Future<List<Map<String, dynamic>>> getListMembersWithProfilesAndRoles(int listId) async {
     try {
       // Preferred approach: select from list_members and include nested profile fields
-      final response = await _client
-          .from('list_members')
-          .select('role, user:profiles(id, username, email)')
-          .eq('list_id', listId);
+      final response = await _client.from('list_members').select('role, user:profiles(id, username, email)').eq('list_id', listId);
 
       if (response == null) return <Map<String, dynamic>>[];
 
@@ -241,68 +227,67 @@ class SupabaseService {
   // FIXED: Real-time stream for list members using switchMap.
   Stream<List<Map<String, dynamic>>> getListMembers(int listId) {
     // 1. Create a simple stream that listens for ANY change in the list_members table for this list.
-    final streamOfChanges = _client
-        .from('list_members')
-        .stream(primaryKey: ['list_id', 'user_id'])
-        .eq('list_id', listId)
-        .order('user_id', ascending: true);
+    final streamOfChanges = _client.from('list_members').stream(primaryKey: ['list_id', 'user_id']).eq('list_id', listId).order('user_id', ascending: true);
 
-    // 2. Use rxdart's switchMap to convert the stream of change notifications
+    // 2. Use rxdart's switchMap to convert the stream of change notifications 
     //    into a stream of the full profile list (by calling the Future function).
     return streamOfChanges.switchMap((_) => Stream.fromFuture(getListMembersWithProfiles(listId)));
   }
 
   /// Finds user by email and adds them as a list member using an RPC (Required due to RLS).
   Future<void> addListMember(int listId, String memberEmail) async {
-    final cur = currentUser?.id;
-    if (cur == null) throw Exception('User not logged in.');
+    final currentUserId = currentUser?.id;
+    if (currentUserId == null) {
+      throw Exception('User not logged in.');
+    }
 
-    // Use RPC to safely find the user by email and insert the member record.
-    final response = await _client.rpc('add_member_by_email_and_list', params: {
-      'list_id_in': listId,
-      'member_email_in': memberEmail,
-      'added_by_id_in': cur,
-    });
+    // 🔑 FIX: Use RPC to safely find the user by email and insert the member record.
+    // The SQL function handles the lookup in auth.users and the insertion into list_members.
+    final response = await _client.rpc(
+      'add_member_by_email_and_list', // NEW SQL FUNCTION NAME
+      params: {
+        'list_id_in': listId,
+        'member_email_in': memberEmail,
+        'added_by_id_in': currentUserId,
+      },
+    );
 
-    // The SQL function returns a text status; handle it if present
-    final status = response;
-    if (status is String) {
-      if (status == 'user_not_found') throw Exception('User with email $memberEmail not found.');
-      if (status == 'permission_denied') throw Exception('You do not have permission to add members.');
-    } else if (status is Map && status.values.isNotEmpty) {
-      // Some clients wrap the return in a map
-      final val = status.values.first;
-      if (val is String) {
-        if (val == 'user_not_found') throw Exception('User with email $memberEmail not found.');
-        if (val == 'permission_denied') throw Exception('You do not have permission to add members.');
-      }
+    // Check the response from the SQL function for errors
+    if (response is String && response == 'user_not_found') {
+      throw Exception('User with email $memberEmail not found.');
     }
   }
 
   /// Removes a member from a list.
   Future<void> removeListMember(int listId, String memberUserId) async {
-    final cur = currentUser?.id;
-    if (cur == null) throw Exception('User not logged in.');
+    final currentUserId = currentUser?.id;
+    if (currentUserId == null) {
+      throw Exception('User not logged in.');
+    }
 
     await _client.from('list_members').delete().eq('list_id', listId).eq('user_id', memberUserId);
   }
 
-  /// Transfers ownership from the current owner to newOwnerId.
+  /// Promotes a member to owner. 
   Future<void> transferOwnership(int listId, String newOwnerId) async {
-    final cur = currentUser?.id;
-    if (cur == null) throw Exception('User not logged in.');
+    final currentUserId = currentUser?.id;
+    if (currentUserId == null) {
+      throw Exception('User not logged in.');
+    }
 
-    // 1. Demote the current owner (if they are owner) to 'member'
+    // 1. Demote the current owner to a regular 'member'
     await _client
         .from('list_members')
         .update({'role': 'owner'})
         .eq('list_id', listId)
-        .eq('user_id', cur)
+        .eq('user_id', currentUserId)
         .eq('role', 'owner');
 
-    // 2. Promote the new user to 'owner' using upsert to create or update
-    await _client.from('list_members').upsert([
-      {'list_id': listId, 'user_id': newOwnerId, 'role': 'owner'}
-    ], onConflict: ['list_id', 'user_id']);
+    // 2. Promote the new user to 'owner'
+    await _client
+        .from('list_members')
+        .upsert([
+          {'list_id': listId, 'user_id': newOwnerId, 'role': 'owner'}
+        ], onConflict: 'list_id,user_id');
   }
 }
