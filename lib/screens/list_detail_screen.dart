@@ -1,16 +1,21 @@
 // lib/screens/list_detail_screen.dart
-// Combined & updated ListDetailScreen:
+// Combined & enhanced ListDetailScreen:
 // - Uses list_members.role via getCurrentUserRole and getListMembersWithProfilesAndRoles
-// - Normalizes ID comparisons to avoid int/string mismatches
-// - Optimistically allows the creator to edit immediately using widget.ownerId
-// - Fetches authoritative list name on init and refreshes owner role
-// - Auto-opens the edit dialog for newly-created/untitled lists when the current user is owner
-// - Preserves existing UI/formatting/reorder/item logic
+// - Optimistic owner initialization so creator can edit immediately
+// - Subscribes to items realtime stream and applies minimal diffs to avoid full rebuilds
+// - Polls members & role every 1s and applies minimal mutations to the AnimatedList (insert/remove/update)
+// - AnimatedList for members with insert/remove animations and AnimatedSwitcher for updates
+// - AnimatedSwitcher for item changes for subtle in-place animations
+// Notes:
+// - Polling every second is aggressive; for production prefer Supabase realtime for list_members.
+// - This file assumes SupabaseService exposes: getItemsStream, getListById, getCurrentUserRole,
+//   getListMembersWithProfilesAndRoles, addListMember, removeListMember, transferOwnership,
+//   updateListName, addItem, updateItem, deleteItem, bulkUpdateItemSortOrder.
 
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../services/supabase_service.dart';
 
-// --- Placeholder for complex features (Keep this) ---
 class DrawingScreen extends StatelessWidget {
   const DrawingScreen({super.key});
   @override
@@ -21,7 +26,6 @@ class DrawingScreen extends StatelessWidget {
     );
   }
 }
-// ----------------------------------------
 
 class ListDetailScreen extends StatefulWidget {
   final String listId;
@@ -39,65 +43,73 @@ class ListDetailScreen extends StatefulWidget {
   State<ListDetailScreen> createState() => _ListDetailScreenState();
 }
 
-class _ListDetailScreenState extends State<ListDetailScreen> {
+class _ListDetailScreenState extends State<ListDetailScreen> with TickerProviderStateMixin {
   final dbService = SupabaseService();
   final TextEditingController _addItemController = TextEditingController();
   final FocusNode _addItemFocusNode = FocusNode();
 
-  // State for the item data (needed for ReorderableListView)
+  // Items (kept in order)
   List<Map<String, dynamic>> _items = [];
 
-  // State for multi-selection
+  // Multi-selection
   final List<int> _selectedItemIds = [];
   bool get isSelecting => _selectedItemIds.isNotEmpty;
 
-  // State for the bottom options bar (just an example for font size)
+  // UI states
   double _currentFontSize = 16.0;
-
-  // Formatting states for the selected items
   bool _isBoldSelected = false;
   bool _isItalicSelected = false;
-
-  // Local variable to allow the listName in the AppBar to change
   late String _localListName;
 
-  // Track current user id and whether they are owner (derived from list_members.role)
+  // Ownership/role
   String _currentUserId = '';
   bool _isCurrentUserOwner = false;
 
-  // Helper: normalize and compare IDs safely
+  // Members and AnimatedList
+  final GlobalKey<AnimatedListState> _membersListKey = GlobalKey<AnimatedListState>();
+  List<Map<String, dynamic>> _members = [];
+  bool _membersLoaded = false;
+
+  // Poll timer
+  Timer? _refreshTimer;
+
+  // Items subscription
+  StreamSubscription<List<Map<String, dynamic>>>? _itemsSub;
+
+  // Helper to compare IDs
   bool _idsEqual(dynamic a, dynamic b) {
     if (a == null || b == null) return false;
     return a.toString() == b.toString();
   }
 
-  // --- Initialization and Cleanup ---
   @override
   void initState() {
     super.initState();
-    _localListName = widget.listName; // initialize from the passed-in value
-
-    // capture current user id (if available)
+    _localListName = widget.listName;
     _currentUserId = dbService.currentUser?.id ?? '';
-
-    // Optimistic owner initialization: allow immediate edit for creator/navigation ownerId
     _isCurrentUserOwner = _idsEqual(widget.ownerId, _currentUserId);
 
-    // Start listening to the items stream immediately
-    dbService.getItemsStream(int.parse(widget.listId)).listen((data) {
-      if (mounted) {
-        setState(() {
-          _items = data;
-        });
-      }
-    });
+    // Subscribe to items realtime stream and apply minimal diffs
+    _itemsSub = dbService.getItemsStream(int.parse(widget.listId)).listen((data) {
+      _applyItemDiffs(data);
+    }, onError: (_) {});
 
-    // Fetch authoritative list name and the current user's role for this list, then update state
+    // Initial authoritative load
     _initOwnershipAndName();
+
+    // Immediate load of members & role and start polling
+    _refreshMembers();
+    _refreshRole();
+    _refreshTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      _refreshMembers();
+      _refreshRole();
+    });
   }
 
   @override
   void dispose() {
+    _refreshTimer?.cancel();
+    _itemsSub?.cancel();
     _addItemController.dispose();
     _addItemFocusNode.dispose();
     super.dispose();
@@ -105,22 +117,15 @@ class _ListDetailScreenState extends State<ListDetailScreen> {
 
   Future<void> _initOwnershipAndName() async {
     try {
-      // getListById: used for authoritative name (lists table)
       final listRow = await dbService.getListById(int.parse(widget.listId));
-      // getCurrentUserRole: returns 'owner' | 'member' | null (based on list_members)
       final role = await dbService.getCurrentUserRole(int.parse(widget.listId));
-
       if (!mounted) return;
-
       setState(() {
         _localListName = listRow?['name'] ?? widget.listName;
         _currentUserId = dbService.currentUser?.id ?? '';
-        // authoritative owner: the role check overrides the optimistic ownerId check
         _isCurrentUserOwner = (role == 'owner') || _idsEqual(widget.ownerId, _currentUserId);
       });
 
-      // If the list looks newly-created/untitled and the current user is owner,
-      // prompt them to rename it. Use post-frame callback so dialogs open safely.
       if (_isCurrentUserOwner &&
           (_localListName.trim().isEmpty || _localListName.toLowerCase().contains('untitled'))) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -128,12 +133,157 @@ class _ListDetailScreenState extends State<ListDetailScreen> {
         });
       }
     } catch (_) {
-      // swallow errors; UI will continue using widget-provided fallback values
+      // ignore
     }
   }
 
-  // --- Selection Management ---
+  // --- Items incremental update (minimal diffs) ---
+  void _applyItemDiffs(List<Map<String, dynamic>> newSnapshot) {
+    if (!mounted) return;
 
+    // quick map by id
+    final oldById = {for (var it in _items) it['id']: it};
+    final newById = {for (var it in newSnapshot) it['id']: it};
+
+    // removed ids
+    final removedIds = oldById.keys.where((id) => !newById.containsKey(id)).toList();
+    // added ids (preserve order from newSnapshot)
+    final addedIds = newSnapshot.map((e) => e['id']).where((id) => !oldById.containsKey(id)).toList();
+    // updated ids
+    final updatedIds = newById.keys.where((id) {
+      if (!oldById.containsKey(id)) return false;
+      final old = oldById[id]!;
+      final neu = newById[id]!;
+      return old['title'] != neu['title'] ||
+          (old['is_completed'] ?? false) != (neu['is_completed'] ?? false) ||
+          (old['is_bold'] ?? false) != (neu['is_bold'] ?? false) ||
+          (old['is_italic'] ?? false) != (neu['is_italic'] ?? false) ||
+          (old['text_color'] ?? '') != (neu['text_color'] ?? '') ||
+          (old['sort_order'] ?? 0) != (neu['sort_order'] ?? 0);
+    }).toList();
+
+    if (removedIds.isEmpty && addedIds.isEmpty && updatedIds.isEmpty) return;
+
+    setState(() {
+      // removals
+      if (removedIds.isNotEmpty) {
+        _items.removeWhere((it) => removedIds.contains(it['id']));
+      }
+      // updates
+      for (final id in updatedIds) {
+        final idx = _items.indexWhere((it) => it['id'] == id);
+        if (idx != -1) _items[idx] = newById[id]!;
+      }
+      // additions: insert according to newSnapshot order
+      for (final newItem in newSnapshot) {
+        final id = newItem['id'];
+        if (!oldById.containsKey(id)) {
+          // determine insert index based on next existing item in newSnapshot
+          final idxInNew = newSnapshot.indexWhere((e) => e['id'] == id);
+          int insertIndex = _items.length;
+          for (int j = idxInNew + 1; j < newSnapshot.length; j++) {
+            final nextId = newSnapshot[j]['id'];
+            final existingIndex = _items.indexWhere((it) => it['id'] == nextId);
+            if (existingIndex != -1) {
+              insertIndex = existingIndex;
+              break;
+            }
+          }
+          _items.insert(insertIndex, newItem);
+        }
+      }
+      // ensure ordering matches authoritative snapshot
+      _items.sort((a, b) {
+        final ia = newSnapshot.indexWhere((e) => e['id'] == a['id']);
+        final ib = newSnapshot.indexWhere((e) => e['id'] == b['id']);
+        return ia.compareTo(ib);
+      });
+    });
+  }
+
+  // --- Polling members & applying minimal changes with animations ---
+  Future<void> _refreshMembers() async {
+    try {
+      final newMembers = await dbService.getListMembersWithProfilesAndRoles(int.parse(widget.listId));
+      if (!mounted) return;
+
+      final oldIds = _members.map((m) => m['id']?.toString()).toList();
+      final newIds = newMembers.map((m) => m['id']?.toString()).toList();
+
+      // removals
+      final removedIds = oldIds.where((id) => id != null && !newIds.contains(id)).toList().cast<String>();
+      for (final rid in removedIds) {
+        final idx = _members.indexWhere((m) => _idsEqual(m['id'], rid));
+        if (idx != -1) {
+          final removed = _members.removeAt(idx);
+          _membersListKey.currentState?.removeItem(
+            idx,
+            (context, animation) => _buildMemberTileAnimated(removed, animation, removing: true),
+            duration: const Duration(milliseconds: 300),
+          );
+        }
+      }
+
+      // updates
+      for (final nm in newMembers) {
+        final id = nm['id']?.toString();
+        if (id == null) continue;
+        final idx = _members.indexWhere((m) => _idsEqual(m['id'], id));
+        if (idx != -1) {
+          final old = _members[idx];
+          if (old['username'] != nm['username'] || old['role'] != nm['role'] || old['email'] != nm['email']) {
+            _members[idx] = nm;
+            // trigger AnimatedSwitcher in tile by setState
+            setState(() {});
+          }
+        }
+      }
+
+      // additions (in authoritative order)
+      for (int i = 0; i < newMembers.length; i++) {
+        final nm = newMembers[i];
+        final id = nm['id']?.toString();
+        if (id == null) continue;
+        if (!_members.any((m) => _idsEqual(m['id'], id))) {
+          final insertIndex = _determineInsertIndexForMember(newMembers, id);
+          _members.insert(insertIndex, nm);
+          _membersListKey.currentState?.insertItem(insertIndex, duration: const Duration(milliseconds: 300));
+        }
+      }
+
+      if (!_membersLoaded) {
+        setState(() => _membersLoaded = true);
+      } else {
+        setState(() {});
+      }
+    } catch (_) {
+      // ignore polling errors
+    }
+  }
+
+  int _determineInsertIndexForMember(List<Map<String, dynamic>> authoritativeList, String memberId) {
+    final idxInAuth = authoritativeList.indexWhere((m) => _idsEqual(m['id'], memberId));
+    if (idxInAuth == -1) return _members.length;
+    for (int i = idxInAuth + 1; i < authoritativeList.length; i++) {
+      final nextId = authoritativeList[i]['id']?.toString();
+      final existingIndex = _members.indexWhere((m) => _idsEqual(m['id'], nextId));
+      if (existingIndex != -1) return existingIndex;
+    }
+    return _members.length;
+  }
+
+  Future<void> _refreshRole() async {
+    try {
+      final role = await dbService.getCurrentUserRole(int.parse(widget.listId));
+      if (!mounted) return;
+      setState(() {
+        _currentUserId = dbService.currentUser?.id ?? '';
+        _isCurrentUserOwner = (role == 'owner') || _idsEqual(widget.ownerId, _currentUserId);
+      });
+    } catch (_) {}
+  }
+
+  // --- Selection helpers (kept) ---
   void _updateFormattingBarState() {
     if (_selectedItemIds.isEmpty) {
       setState(() {
@@ -142,16 +292,10 @@ class _ListDetailScreenState extends State<ListDetailScreen> {
       });
       return;
     }
-
-    // Get the items corresponding to selected IDs
     final selectedItems = _items.where((item) => _selectedItemIds.contains(item['id'])).toList();
-
     if (selectedItems.isEmpty) return;
-
-    // Check if ALL selected items share the property (for UI state)
     final allBold = selectedItems.every((item) => item['is_bold'] == true);
     final allItalic = selectedItems.every((item) => item['is_italic'] == true);
-
     setState(() {
       _isBoldSelected = allBold;
       _isItalicSelected = allItalic;
@@ -160,11 +304,8 @@ class _ListDetailScreenState extends State<ListDetailScreen> {
 
   void _toggleSelection(int itemId) {
     setState(() {
-      if (_selectedItemIds.contains(itemId)) {
-        _selectedItemIds.remove(itemId);
-      } else {
-        _selectedItemIds.add(itemId);
-      }
+      if (_selectedItemIds.contains(itemId)) _selectedItemIds.remove(itemId);
+      else _selectedItemIds.add(itemId);
       _updateFormattingBarState();
     });
   }
@@ -176,468 +317,250 @@ class _ListDetailScreenState extends State<ListDetailScreen> {
     });
   }
 
-  // --- Core Action Methods ---
-
+  // --- CRUD helpers (wrap SupabaseService calls) ---
   Future<void> _addNewItem(String title) async {
-    final trimmedTitle = title.trim();
-    if (trimmedTitle.isEmpty) return;
-
+    final t = title.trim();
+    if (t.isEmpty) return;
     try {
-      await dbService.addItem(int.parse(widget.listId), trimmedTitle);
+      await dbService.addItem(int.parse(widget.listId), t);
       _addItemController.clear();
-      _addItemFocusNode.requestFocus(); // Keep focus for rapid entry
+      _addItemFocusNode.requestFocus();
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to add item: ${e.toString()}')));
-      }
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to add item: $e')));
     }
   }
 
   Future<void> _deleteSelectedItems() async {
-    final idsToDelete = List<int>.from(_selectedItemIds);
-    _clearSelection(); // Clear selection and update formatting state immediately
-
-    // Perform deletion for each selected ID
-    for (final id in idsToDelete) {
-      await dbService.deleteItem(id);
-    }
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${idsToDelete.length} items deleted.')),
-      );
-    }
+    final ids = List<int>.from(_selectedItemIds);
+    _clearSelection();
+    for (final id in ids) await dbService.deleteItem(id);
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${ids.length} items deleted.')));
   }
 
   Future<void> _updateSelectedItems(bool isCompleted) async {
-    final idsToUpdate = List<int>.from(_selectedItemIds);
-
-    for (final id in idsToUpdate) {
-      await dbService.updateItem(id, {'is_completed': isCompleted});
-    }
-    // Re-fetch or rely on the stream to update UI
+    final ids = List<int>.from(_selectedItemIds);
+    for (final id in ids) await dbService.updateItem(id, {'is_completed': isCompleted});
   }
 
-  // NEW: Update selected items with a styling property
   Future<void> _updateSelectedItemsStyle(Map<String, dynamic> styleUpdate) async {
-    final idsToUpdate = List<int>.from(_selectedItemIds);
-    if (idsToUpdate.isEmpty) return;
-
-    // Perform bulk update on the database
-    for (final id in idsToUpdate) {
-      await dbService.updateItem(id, styleUpdate);
-    }
+    final ids = List<int>.from(_selectedItemIds);
+    if (ids.isEmpty) return;
+    for (final id in ids) await dbService.updateItem(id, styleUpdate);
   }
 
-  // --- Reordering Logic (Requires 'sort_order' column in DB) ---
-  void _onReorder(int oldIndex, int newIndex) async {
-    // 1. Handle local reordering immediately for smooth UX
+  Future<void> _onReorder(int oldIndex, int newIndex) async {
+    if (newIndex > oldIndex) newIndex -= 1;
     setState(() {
-      if (newIndex > oldIndex) {
-        newIndex -= 1;
-      }
       final item = _items.removeAt(oldIndex);
       _items.insert(newIndex, item);
     });
-
-    // 2. Prepare the bulk update for Supabase
-    final List<Map<String, dynamic>> updates = [];
-    for (int i = 0; i < _items.length; i++) {
-      updates.add({
-        'id': _items[i]['id'],
-        'sort_order': i, // Use the current list index as the new sort_order
-      });
-    }
-
-    // 3. Send bulk updates to Supabase
+    final updates = <Map<String, dynamic>>[];
+    for (int i = 0; i < _items.length; i++) updates.add({'id': _items[i]['id'], 'sort_order': i});
     try {
       await dbService.bulkUpdateItemSortOrder(updates);
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to save new order: $e')),
-        );
-      }
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to save new order: $e')));
     }
   }
 
-  // Helper function to convert Hex String to Color
-  Color _hexToColor(String? hex) {
-    // Get the theme's default text color (handles dark/light mode)
-    final defaultColor = Theme.of(context).textTheme.bodyMedium?.color ?? Colors.black;
-
-    if (hex == null || hex.isEmpty) {
-      return defaultColor; // Use theme default if no color is set
-    }
-
-    hex = hex.replaceFirst('#', '');
-    // Ensure it has 6 or 8 digits, prepend FF if only 6 are present
-    if (hex.length == 6) {
-      hex = 'FF$hex';
-    } else if (hex.length != 8) {
-      return defaultColor; // Use theme default if hex is invalid
-    }
-    try {
-      return Color(int.parse(hex, radix: 16));
-    } catch (_) {
-      return defaultColor;
-    }
+  // --- Members UI helpers (animated) ---
+  Widget _buildMemberTileAnimated(Map<String, dynamic> member, Animation<double> animation, {bool removing = false}) {
+    final username = member['username'] as String? ?? 'Unknown';
+    final role = member['role'] as String? ?? 'member';
+    return SizeTransition(
+      sizeFactor: animation,
+      axisAlignment: 0.0,
+      child: FadeTransition(
+        opacity: animation,
+        child: ListTile(
+          title: Text(username),
+          subtitle: Text(role == 'owner' ? 'Owner' : 'Member'),
+        ),
+      ),
+    );
   }
 
-  // --- List Name Update Methods (New) ---
+  Widget _buildMemberTile(Map<String, dynamic> member) {
+    final id = member['id']?.toString() ?? '';
+    final username = member['username'] as String? ?? 'Unknown';
+    final role = member['role'] as String? ?? 'member';
+    final isSelf = _idsEqual(id, dbService.currentUser?.id);
+    final isOwner = role == 'owner';
 
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 250),
+      transitionBuilder: (child, anim) => FadeTransition(opacity: anim, child: child),
+      child: ListTile(
+        key: ValueKey(id + (member['role'] ?? '') + (member['username'] ?? '')),
+        title: Text(username + (isSelf ? ' (You)' : '')),
+        subtitle: Text(isOwner ? 'Owner' : 'Member'),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (_isCurrentUserOwner && !isOwner)
+              IconButton(icon: const Icon(Icons.star_border, color: Colors.amber), onPressed: () => _showOwnerTransferConfirmation(id, username)),
+            if ((_isCurrentUserOwner && !isOwner) || (isSelf && !isOwner))
+              IconButton(icon: const Icon(Icons.remove_circle_outline, color: Colors.red), onPressed: () => _removeMember(id, username)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // --- List name update UI ---
   Future<void> _updateListName(String newName) async {
-    final trimmedName = newName.trim();
-    // Check if the name has changed and is not empty
-    if (trimmedName.isEmpty || trimmedName == _localListName) return;
-
+    final t = newName.trim();
+    if (t.isEmpty || t == _localListName) return;
     try {
-      // Database call to update the list name
-      await dbService.updateListName(int.parse(widget.listId), trimmedName);
-
-      // Update the local state
-      setState(() {
-        _localListName = trimmedName;
-      });
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('List name updated successfully.')),
-        );
-      }
+      await dbService.updateListName(int.parse(widget.listId), t);
+      setState(() => _localListName = t);
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('List name updated successfully.')));
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to update list name: ${e.toString()}')),
-        );
-      }
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to update list name: $e')));
     }
   }
 
-  // Dialog to handle name editing
   void _showEditTitleDialog() {
-    final titleController = TextEditingController(text: _localListName);
+    final tc = TextEditingController(text: _localListName);
     showDialog(
       context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text('Edit List Name'),
-          content: TextField(
-            controller: titleController,
-            decoration: const InputDecoration(hintText: "Enter new list name"),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-            ElevatedButton(
-              onPressed: () {
-                Navigator.pop(context);
-                _updateListName(titleController.text); // Call the update function
-              },
-              child: const Text('Save'),
-            ),
-          ],
-        );
-      },
+      builder: (context) => AlertDialog(
+        title: const Text('Edit List Name'),
+        content: TextField(controller: tc, decoration: const InputDecoration(hintText: 'Enter new list name')),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () { Navigator.pop(context); _updateListName(tc.text); }, child: const Text('Save')),
+        ],
+      ),
     );
   }
 
-  // --- Members Dialog & Sharing ---
-
-  // Dialog to prompt for email and call addListMember
   void _showShareDialog() {
-    final shareController = TextEditingController();
+    final tc = TextEditingController();
     showDialog(
       context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: Text('Share "${_localListName}"'),
-          content: TextField(
-            controller: shareController,
-            decoration: const InputDecoration(
-              hintText: "Enter user's email address",
-            ),
-            keyboardType: TextInputType.emailAddress,
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-            ElevatedButton(
-              onPressed: () async {
-                Navigator.pop(context);
-                await _addMember(shareController.text);
-              },
-              child: const Text('Share'),
-            ),
-          ],
-        );
-      },
+      builder: (context) => AlertDialog(
+        title: Text('Share "${_localListName}"'),
+        content: TextField(controller: tc, decoration: const InputDecoration(hintText: "Enter user's email address")),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () async { Navigator.pop(context); await _addMember(tc.text); }, child: const Text('Share')),
+        ],
+      ),
     );
   }
 
-  // Dialog to view, add, and remove members - uses list_members.role for owner detection
   void _showMembersDialog() {
-    final currentUserId = dbService.currentUser?.id;
-    final isCurrentUserOwner = _isCurrentUserOwner;
-
-    // Use a unique key to force the FutureBuilder to rebuild every time the dialog is shown
-    final dialogKey = UniqueKey();
-
+    final isOwner = _isCurrentUserOwner;
+    final key = UniqueKey();
     showDialog(
       context: context,
-      builder: (context) {
-        return AlertDialog(
-          key: dialogKey,
-          title: const Text('List Members'),
-          content: SizedBox(
-            width: double.maxFinite,
-            child: FutureBuilder<List<Map<String, dynamic>>>(
-              // IMPORTANT: this method should return members with 'role' and profile fields
-              future: dbService.getListMembersWithProfilesAndRoles(int.parse(widget.listId)),
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-                if (snapshot.hasError) {
-                  return Center(child: Text('Error: ${snapshot.error}'));
-                }
-
-                // snapshot.data is a List of maps containing id, username, role, etc.
-                final profiles = snapshot.data ?? [];
-                final currentUserIdLocal = dbService.currentUser?.id;
-
-                return ListView.builder(
+      builder: (context) => AlertDialog(
+        key: key,
+        title: const Text('List Members'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: _membersLoaded
+              ? AnimatedList(
+                  key: _membersListKey,
+                  initialItemCount: _members.length,
                   shrinkWrap: true,
-                  itemCount: profiles.length,
-                  itemBuilder: (context, index) {
-                    final memberProfile = profiles[index];
-
-                    final memberUserId = memberProfile['id']?.toString() ?? '';
-                    final username = memberProfile['username'] as String? ?? 'Unknown User';
-                    final role = memberProfile['role'] as String? ?? 'member';
-
-                    final isOwner = role == 'owner';
-                    final isSelf = _idsEqual(memberUserId, currentUserIdLocal);
-
-                    return ListTile(
-                      title: Text(username + (isSelf ? ' (You)' : '')),
-                      // Display the role based on the returned role
-                      subtitle: Text(isOwner ? 'Owner' : 'Member'),
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          // Owner Transfer Button (Only visible if current user is owner and the target is not the owner)
-                          if (isCurrentUserOwner && !isOwner)
-                            IconButton(
-                              icon: const Icon(Icons.star_border, color: Colors.amber),
-                              onPressed: () => _showOwnerTransferConfirmation(memberUserId, username),
-                              tooltip: 'Make Owner',
-                            ),
-
-                          // Remove Member/Leave List Button
-                          // Owner can remove others OR non-owner can remove themselves
-                          if ((isCurrentUserOwner && !isOwner) || (isSelf && !isOwner))
-                            IconButton(
-                              icon: const Icon(Icons.remove_circle_outline, color: Colors.red),
-                              onPressed: () => _removeMember(memberUserId, username),
-                              tooltip: isSelf ? 'Leave List' : 'Remove Member',
-                            ),
-                        ],
-                      ),
-                    );
-                  },
-                );
-              },
-            ),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close')),
-            // Only show 'Add Member' button if the current user is the owner
-            if (isCurrentUserOwner)
-              ElevatedButton.icon(
-                onPressed: () {
-                  Navigator.pop(context); // Close members dialog
-                  _showAddMemberDialog(); // Open add member dialog
-                },
-                icon: const Icon(Icons.add),
-                label: const Text('Add Member'),
-              ),
-          ],
-        );
-      },
-    ); // Removed the .then((_) => setState({})); since the unique key will force a rebuild when the dialog opens.
+                  itemBuilder: (context, index, animation) => _buildMemberTileAnimated(_members[index], animation),
+                )
+              : const Center(child: CircularProgressIndicator()),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close')),
+          if (isOwner)
+            ElevatedButton.icon(icon: const Icon(Icons.add), label: const Text('Add Member'), onPressed: () { Navigator.pop(context); _showAddMemberDialog(); }),
+        ],
+      ),
+    );
   }
 
-  // Helper dialog for adding a member
   void _showAddMemberDialog() {
-    final shareController = TextEditingController();
+    final tc = TextEditingController();
     showDialog(
       context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: Text('Add Member to "${_localListName}"'),
-          content: TextField(
-            controller: shareController,
-            decoration: const InputDecoration(
-              hintText: "Enter user's email address",
-            ),
-            keyboardType: TextInputType.emailAddress,
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-            ElevatedButton(
-              onPressed: () async {
-                // Close the add dialog
-                Navigator.pop(context);
-                // Call add member
-                await _addMember(shareController.text);
-                // Re-open the members dialog to show the updated list
-                _showMembersDialog();
-              },
-              child: const Text('Add'),
-            ),
-          ],
-        );
-      },
+      builder: (context) => AlertDialog(
+        title: Text('Add Member to "${_localListName}"'),
+        content: TextField(controller: tc, decoration: const InputDecoration(hintText: 'Enter user\'s email address')),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () async { Navigator.pop(context); await _addMember(tc.text); }, child: const Text('Add')),
+        ],
+      ),
     );
   }
 
   Future<void> _addMember(String email) async {
-    final trimmedEmail = email.trim();
-    if (trimmedEmail.isEmpty) return;
-
+    final t = email.trim();
+    if (t.isEmpty) return;
     try {
-      await dbService.addListMember(int.parse(widget.listId), trimmedEmail);
-      // No need to call setState here as the dialog will be manually reopened after this Future completes
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Member added: $trimmedEmail')),
-        );
-      }
+      await dbService.addListMember(int.parse(widget.listId), t);
+      await _refreshMembers();
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Member added: $t')));
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to add member: ${e.toString()}')),
-        );
-      }
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to add member: $e')));
     }
   }
 
   Future<void> _removeMember(String userId, String username) async {
     try {
       await dbService.removeListMember(int.parse(widget.listId), userId);
-
-      if (mounted) {
-        // Only try to re-open the members dialog if the current user didn't remove themselves
-        if (userId != dbService.currentUser?.id) {
-          // Close the current dialog instance
-          Navigator.pop(context);
-          // Re-open the members dialog to show the updated list
-          _showMembersDialog();
-        } else {
-          // If the user removed themselves, the list stream listener will handle navigation back
-          // No need to explicitly close the dialog here, as navigation will handle it.
-        }
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('$username removed from list.')),
-        );
-      }
+      await _refreshMembers();
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$username removed from list.')));
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to remove member: ${e.toString()}')),
-        );
-      }
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to remove member: $e')));
     }
   }
 
   void _showOwnerTransferConfirmation(String userId, String username) {
     showDialog(
       context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text('Transfer Ownership'),
-          content: Text.rich(
-            TextSpan(
-              text: 'Are you sure you want to make ',
-              children: [
-                TextSpan(
-                  text: username,
-                  style: const TextStyle(fontWeight: FontWeight.bold),
-                ),
-                const TextSpan(text: ' the new list owner? This action is '),
-                const TextSpan(
-                  text: 'not reversible',
-                  style: TextStyle(fontWeight: FontWeight.bold, color: Colors.red),
-                ),
-                const TextSpan(text: ' and you will be demoted to a regular member.'),
-              ],
-            ),
+      builder: (context) => AlertDialog(
+        title: const Text('Transfer Ownership'),
+        content: Text.rich(
+          TextSpan(
+            text: 'Are you sure you want to make ',
+            children: [
+              TextSpan(text: username, style: const TextStyle(fontWeight: FontWeight.bold)),
+              const TextSpan(text: ' the new list owner? This action is '),
+              const TextSpan(text: 'not reversible', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.red)),
+              const TextSpan(text: ' and you will be demoted to a regular member.'),
+            ],
           ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-              onPressed: () async {
-                Navigator.pop(context); // Close confirmation dialog
-                await _transferOwnership(userId, username);
-                // Re-open the members dialog to show the updated owner status
-                _showMembersDialog();
-              },
-              child: const Text('Transfer Ownership', style: TextStyle(color: Colors.white)),
-            ),
-          ],
-        );
-      },
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: Colors.red), onPressed: () async { Navigator.pop(context); await _transferOwnership(userId, username); }, child: const Text('Transfer Ownership', style: TextStyle(color: Colors.white))),
+        ],
+      ),
     );
   }
 
   Future<void> _transferOwnership(String userId, String username) async {
     try {
       await dbService.transferOwnership(int.parse(widget.listId), userId);
-      // The list stream listener in the home screen will handle the change of ownership
-      // and might trigger a refresh or redraw of this screen if the list is still valid for the current user.
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Ownership transferred to $username!')),
-        );
-        // Important: Refresh authoritative owner/role state
-        await _initOwnershipAndName();
-        setState(() {});
-      }
+      await _refreshMembers();
+      await _refreshRole();
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Ownership transferred to $username!')));
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to transfer ownership: ${e.toString()}')),
-        );
-      }
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to transfer ownership: $e')));
     }
   }
 
-  // --- UI Builders ---
-
+  // --- AppBar & bottom bars (unchanged structurally) ---
   AppBar _buildSelectionAppBar() {
     return AppBar(
       title: Text('${_selectedItemIds.length} Items Selected'),
-      leading: IconButton(
-        icon: const Icon(Icons.close),
-        onPressed: _clearSelection,
-      ),
+      leading: IconButton(icon: const Icon(Icons.close), onPressed: _clearSelection),
       actions: [
-        // Check All / Uncheck All (Toggle completion status)
-        IconButton(
-          icon: const Icon(Icons.select_all),
-          tooltip: 'Check All / Uncheck All',
-          onPressed: () {
-            // Check if ALL selected items are completed
-            final allCompleted = _selectedItemIds.every(
-                (id) => _items.firstWhere((item) => item['id'] == id)['is_completed'] == true);
-            // If all are completed, uncheck them. Otherwise, check them.
-            _updateSelectedItems(!allCompleted);
-          },
-        ),
-        IconButton(
-          icon: const Icon(Icons.delete),
-          tooltip: 'Delete Selected',
-          onPressed: _deleteSelectedItems,
-        ),
+        IconButton(icon: const Icon(Icons.select_all), tooltip: 'Check All / Uncheck All', onPressed: () {
+          final allCompleted = _selectedItemIds.every((id) => _items.firstWhere((item) => item['id'] == id)['is_completed'] == true);
+          _updateSelectedItems(!allCompleted);
+        }),
+        IconButton(icon: const Icon(Icons.delete), tooltip: 'Delete Selected', onPressed: _deleteSelectedItems),
       ],
     );
   }
@@ -645,139 +568,94 @@ class _ListDetailScreenState extends State<ListDetailScreen> {
   Widget _buildNormalAppBar() {
     return AppBar(
       title: GestureDetector(
-        onTap: _isCurrentUserOwner ? _showEditTitleDialog : null, // Only allow owner to edit
-        child: Text(
-          _localListName, // <--- Using local name
-          style: TextStyle(
-            // Optional: change style to indicate editable/non-editable
-            decoration: _isCurrentUserOwner ? TextDecoration.underline : null,
-            decorationStyle: TextDecorationStyle.dashed,
-          ),
-        ),
+        onTap: _isCurrentUserOwner ? _showEditTitleDialog : null,
+        child: Text(_localListName, style: TextStyle(decoration: _isCurrentUserOwner ? TextDecoration.underline : null, decorationStyle: TextDecorationStyle.dashed)),
       ),
       actions: [
-        IconButton(
-          icon: const Icon(Icons.brush),
-          onPressed: () {
-            Navigator.push(context, MaterialPageRoute(builder: (_) => const DrawingScreen()));
-          },
-        ),
-        IconButton(
-          icon: const Icon(Icons.people), // Updated icon
-          onPressed: _showMembersDialog, // New handler
-        ),
-        IconButton(
-          icon: const Icon(Icons.share),
-          onPressed: _showShareDialog,
-        ),
+        IconButton(icon: const Icon(Icons.brush), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const DrawingScreen()))),
+        IconButton(icon: const Icon(Icons.people), onPressed: _showMembersDialog),
+        IconButton(icon: const Icon(Icons.share), onPressed: _showShareDialog),
       ],
     );
   }
 
-  // Renders the bottom bar for formatting when in normal mode (SIMPLIFIED)
   Widget _buildNormalBottomBar() {
     return BottomAppBar(
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
-        children: <Widget>[
-          // Font Size Button
-          IconButton(
-            icon: const Icon(Icons.format_size),
-            onPressed: () {
-              setState(() {
-                _currentFontSize = _currentFontSize == 16.0 ? 20.0 : 16.0;
-              });
-            },
-            tooltip: 'Toggle Font Size',
-          ),
-          // Disable Checkboxes Button (Checkbox with slash icon)
-          IconButton(
-            icon: const Icon(Icons.disabled_by_default_outlined),
-            onPressed: () {
-              // TODO: Implement logic to toggle checkbox visibility/functionality
-            },
-            tooltip: 'Hide Checkboxes',
-          ),
-          const Spacer(), // Pushes buttons to the left
-        ],
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8.0),
+        child: Row(children: [
+          Expanded(child: TextField(controller: _addItemController, focusNode: _addItemFocusNode, decoration: InputDecoration(hintText: 'New item...', suffixIcon: IconButton(icon: const Icon(Icons.add), onPressed: () => _addNewItem(_addItemController.text)), border: const OutlineInputBorder()), onSubmitted: (v) => _addNewItem(v))),
+          const SizedBox(width: 8),
+          IconButton(icon: const Icon(Icons.more_vert), onPressed: () {}),
+        ]),
       ),
     );
   }
 
-  // Renders the bottom bar for bulk actions OR single item formatting
   Widget _buildSelectionBottomBar() {
-    final isSingleItemSelected = _selectedItemIds.length == 1;
-
-    // Group bulk actions and single-item formatting
-    final actions = isSingleItemSelected
+    final isSingle = _selectedItemIds.length == 1;
+    final actions = isSingle
         ? <Widget>[
-            // 1. BOLD TOGGLE
-            IconButton(
-              icon: Icon(Icons.format_bold,
-                  color: _isBoldSelected ? Theme.of(context).colorScheme.primary : Colors.grey),
-              onPressed: () async {
-                final newState = !_isBoldSelected;
-                await _updateSelectedItemsStyle({'is_bold': newState});
-                _updateFormattingBarState(); // Refresh UI state
-              },
-              tooltip: 'Bold',
-            ),
-            // 2. ITALIC TOGGLE
-            IconButton(
-              icon: Icon(Icons.format_italic,
-                  color: _isItalicSelected ? Theme.of(context).colorScheme.primary : Colors.grey),
-              onPressed: () async {
-                final newState = !_isItalicSelected;
-                await _updateSelectedItemsStyle({'is_italic': newState});
-                _updateFormattingBarState(); // Refresh UI state
-              },
-              tooltip: 'Italicize',
-            ),
-            // 3. COLOR PICKER (Placeholder Toggling between Black and Red)
-            IconButton(
-              icon: const Icon(Icons.color_lens),
-              onPressed: () async {
-                final currentItem = _items.firstWhere((item) => item['id'] == _selectedItemIds.first);
-                final currentColorHex = currentItem['text_color'] as String? ?? '000000';
-                // Toggle color between '000000' (black) and 'FF0000' (red) for demo
-                final newColorHex = currentColorHex.toUpperCase() == '000000' ? 'FF0000' : '000000';
-                await _updateSelectedItemsStyle({'text_color': newColorHex});
-                // The stream will handle the UI refresh.
-              },
-              tooltip: 'Change Font Color/Highlight (Demo)',
-            ),
+            IconButton(icon: Icon(Icons.format_bold, color: _isBoldSelected ? Theme.of(context).colorScheme.primary : Colors.grey), onPressed: () async {
+              final newState = !_isBoldSelected;
+              await _updateSelectedItemsStyle({'is_bold': newState});
+              _updateFormattingBarState();
+            }),
+            IconButton(icon: Icon(Icons.format_italic, color: _isItalicSelected ? Theme.of(context).colorScheme.primary : Colors.grey), onPressed: () async {
+              final newState = !_isItalicSelected;
+              await _updateSelectedItemsStyle({'is_italic': newState});
+              _updateFormattingBarState();
+            }),
+            IconButton(icon: const Icon(Icons.color_lens), onPressed: () async {
+              final currentItem = _items.firstWhere((item) => item['id'] == _selectedItemIds.first);
+              final currentColorHex = currentItem['text_color'] as String? ?? '000000';
+              final newColorHex = currentColorHex.toUpperCase() == '000000' ? 'FF0000' : '000000';
+              await _updateSelectedItemsStyle({'text_color': newColorHex});
+            }),
           ]
         : <Widget>[
-            // Bulk actions when multiple items are selected
-            IconButton(
-              icon: const Icon(Icons.check_box),
-              onPressed: () => _updateSelectedItems(true),
-              tooltip: 'Check All Selected',
-            ),
-            IconButton(
-              icon: const Icon(Icons.check_box_outline_blank),
-              onPressed: () => _updateSelectedItems(false),
-              tooltip: 'Uncheck All Selected',
-            ),
-            IconButton(
-              icon: const Icon(Icons.delete),
-              onPressed: _deleteSelectedItems,
-              tooltip: 'Delete Selected Items',
-            ),
+            IconButton(icon: const Icon(Icons.check_box), onPressed: () => _updateSelectedItems(true)),
+            IconButton(icon: const Icon(Icons.check_box_outline_blank), onPressed: () => _updateSelectedItems(false)),
+            IconButton(icon: const Icon(Icons.delete), onPressed: _deleteSelectedItems),
           ];
+    return BottomAppBar(child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [...actions, IconButton(icon: const Icon(Icons.cancel), onPressed: _clearSelection)]));
+  }
 
-    return BottomAppBar(
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
-        children: [
-          ...actions,
-          // Always include the clear selection button
-          IconButton(
-            icon: const Icon(Icons.cancel),
-            onPressed: _clearSelection,
-            tooltip: 'Clear Selection',
-          ),
-        ],
+  // Item row with AnimatedSwitcher to animate subtle content changes
+  Widget _buildItemRow(Map<String, dynamic> item) {
+    final itemId = item['id'] as int;
+    final isCompleted = item['is_completed'] as bool? ?? false;
+    final isBold = item['is_bold'] as bool? ?? false;
+    final isItalic = item['is_italic'] as bool? ?? false;
+    final colorHex = item['text_color'] as String?;
+    final itemColor = _hexToColor(colorHex);
+
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 220),
+      transitionBuilder: (child, anim) => FadeTransition(opacity: anim, child: SizeTransition(sizeFactor: anim, axisAlignment: 0.0, child: child)),
+      child: Container(
+        key: ValueKey('item-${itemId}-${item['title']}-${item['is_completed']}'),
+        color: _selectedItemIds.contains(itemId) ? Theme.of(context).colorScheme.primary.withOpacity(0.1) : null,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 12.0),
+          child: Row(children: [
+            GestureDetector(onTap: _selectedItemIds.isNotEmpty ? () => _toggleSelection(itemId) : () async => await dbService.updateItem(itemId, {'is_completed': !isCompleted}), child: Padding(padding: const EdgeInsets.symmetric(horizontal: 16.0), child: Icon(isCompleted ? Icons.check_box : Icons.check_box_outline_blank, color: isCompleted ? Theme.of(context).colorScheme.primary : Colors.grey))),
+            Expanded(
+              child: TextFormField(
+                initialValue: item['title'] as String,
+                enabled: _selectedItemIds.isEmpty,
+                keyboardType: TextInputType.text,
+                style: TextStyle(fontSize: _currentFontSize, decoration: isCompleted ? TextDecoration.lineThrough : null, color: isCompleted ? itemColor.withOpacity(0.6) : itemColor, fontWeight: isBold ? FontWeight.bold : FontWeight.normal, fontStyle: isItalic ? FontStyle.italic : FontStyle.normal),
+                decoration: const InputDecoration(border: InputBorder.none, contentPadding: EdgeInsets.zero),
+                onFieldSubmitted: (newTitle) async {
+                  final trimmed = newTitle.trim();
+                  if (trimmed.isEmpty) await dbService.deleteItem(itemId);
+                  else await dbService.updateItem(itemId, {'title': trimmed});
+                },
+              ),
+            ),
+          ]),
+        ),
       ),
     );
   }
@@ -785,138 +663,46 @@ class _ListDetailScreenState extends State<ListDetailScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      // FIX: AppBar return types are now explicitly AppBar, resolving the previous error.
       appBar: (isSelecting ? _buildSelectionAppBar() : _buildNormalAppBar()) as PreferredSizeWidget,
-
-      // Tap outside the list to deselect all items
       body: GestureDetector(
         onTap: isSelecting ? _clearSelection : null,
-        child: Column(
-          children: [
-            // 1. The main list of items (Now ReorderableListView)
-            Expanded(
-              child: _items.isEmpty
-                  ? const Center(child: Text("Start by adding a new item below."))
-                  : ReorderableListView.builder(
-                      padding: const EdgeInsets.only(top: 8.0, bottom: 8.0),
-                      itemCount: _items.length,
-                      onReorder: _onReorder,
-                      itemBuilder: (context, index) {
-                        final item = _items[index];
-                        final itemId = item['id'] as int;
-                        final isCompleted = item['is_completed'] as bool? ?? false;
-                        final isSelected = _selectedItemIds.contains(itemId);
-
-                        // NEW: Read styling properties
-                        final isBold = item['is_bold'] as bool? ?? false;
-                        final isItalic = item['is_italic'] as bool? ?? false;
-                        // Default color to theme if 'text_color' is missing or null
-                        final colorHex = item['text_color'] as String?;
-                        final itemColor = _hexToColor(colorHex);
-
-                        // Wrap each item in a LongPress and Tap Detector
-                        return GestureDetector(
-                          key: ValueKey(itemId), // Required for ReorderableListView
-                          onLongPress: () => _toggleSelection(itemId),
-                          onTap: isSelecting ? () => _toggleSelection(itemId) : null, // Only toggle selection if mode is active
-
-                          child: Container(
-                            color: isSelected ? Theme.of(context).colorScheme.primary.withOpacity(0.1) : null,
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 12.0),
-                              child: Row(
-                                children: [
-                                  // LEFT SIDE: Selection/Checkbox Toggling Zone
-                                  GestureDetector(
-                                    onTap: isSelecting
-                                        ? () => _toggleSelection(itemId) // If selecting, tap toggles selection
-                                        : () async { // Otherwise, tap toggles completion
-                                            await dbService.updateItem(
-                                              itemId,
-                                              {'is_completed': !isCompleted},
-                                            );
-                                          },
-                                    child: Padding(
-                                      padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                                      child: isSelecting
-                                          ? Icon( // Show selection indicator
-                                              isSelected ? Icons.check_circle : Icons.circle_outlined,
-                                              color: Theme.of(context).colorScheme.primary,
-                                            )
-                                          : Icon( // Show completion checkbox
-                                              isCompleted ? Icons.check_box : Icons.check_box_outline_blank,
-                                              color: isCompleted ? Theme.of(context).colorScheme.primary : Colors.grey,
-                                            ),
-                                    ),
-                                  ),
-
-                                  // RIGHT SIDE: Editable Text Field Zone
-                                  Expanded(
-                                    child: TextFormField(
-                                      initialValue: item['title'] as String,
-                                      enabled: !isSelecting, // Disable editing when selecting
-                                      keyboardType: TextInputType.text,
-                                      style: TextStyle(
-                                        fontSize: _currentFontSize,
-                                        decoration: isCompleted ? TextDecoration.lineThrough : null,
-                                        color: isCompleted ? itemColor.withOpacity(0.6) : itemColor,
-                                        fontWeight: isBold ? FontWeight.bold : FontWeight.normal,
-                                        fontStyle: isItalic ? FontStyle.italic : FontStyle.normal,
-                                      ),
-                                      decoration: const InputDecoration(
-                                        border: InputBorder.none,
-                                        contentPadding: EdgeInsets.zero,
-                                      ),
-                                      // On submit (deletion/update logic)
-                                      onFieldSubmitted: (newTitle) async {
-                                        final trimmedTitle = newTitle.trim();
-                                        if (trimmedTitle.isEmpty) {
-                                          await dbService.deleteItem(itemId);
-                                        } else {
-                                          await dbService.updateItem(
-                                            itemId,
-                                            {'title': trimmedTitle},
-                                          );
-                                        }
-                                      },
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        );
-                      },
-                    ),
+        child: Column(children: [
+          Expanded(
+            child: _items.isEmpty ? const Center(child: Text("Start by adding a new item below.")) : ReorderableListView.builder(
+              padding: const EdgeInsets.only(top: 8.0, bottom: 8.0),
+              itemCount: _items.length,
+              onReorder: _onReorder,
+              itemBuilder: (context, index) {
+                final item = _items[index];
+                final itemId = item['id'] as int;
+                return GestureDetector(
+                  key: ValueKey(itemId),
+                  onLongPress: () => _toggleSelection(itemId),
+                  onTap: isSelecting ? () => _toggleSelection(itemId) : null,
+                  child: _buildItemRow(item),
+                );
+              },
             ),
-
-            // 2. Add New Item Input Field
-            if (!isSelecting) // Hide input field when in selection mode
-              Padding(
-                padding: const EdgeInsets.all(8.0),
-                child: TextField(
-                  controller: _addItemController,
-                  focusNode: _addItemFocusNode,
-                  decoration: InputDecoration(
-                    hintText: "New item...",
-                    suffixIcon: IconButton(
-                      icon: const Icon(Icons.add),
-                      onPressed: () => _addNewItem(_addItemController.text),
-                    ),
-                    border: const OutlineInputBorder(),
-                  ),
-                  onSubmitted: (value) {
-                    _addNewItem(value);
-                  },
-                ),
-              ),
-          ],
-        ),
+          ),
+          if (!isSelecting) Padding(padding: const EdgeInsets.all(8.0), child: TextField(controller: _addItemController, focusNode: _addItemFocusNode, decoration: InputDecoration(hintText: 'New item...', suffixIcon: IconButton(icon: const Icon(Icons.add), onPressed: () => _addNewItem(_addItemController.text)), border: const OutlineInputBorder()), onSubmitted: (v) => _addNewItem(v))),
+        ]),
       ),
-
-      // 3. Bottom Options Bar for Styling/Tools
       bottomNavigationBar: isSelecting ? _buildSelectionBottomBar() : _buildNormalBottomBar(),
     );
+  }
+
+  // convert hex to Color
+  Color _hexToColor(String? hex) {
+    final defaultColor = Theme.of(context).textTheme.bodyMedium?.color ?? Colors.black;
+    if (hex == null || hex.isEmpty) return defaultColor;
+    hex = hex.replaceFirst('#', '');
+    if (hex.length == 6) hex = 'FF$hex';
+    if (hex.length != 8) return defaultColor;
+    try {
+      return Color(int.parse(hex, radix: 16));
+    } catch (_) {
+      return defaultColor;
+    }
   }
 }
 
