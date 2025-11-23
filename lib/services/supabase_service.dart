@@ -235,31 +235,40 @@ class SupabaseService {
   }
 
   Future<List<Map<String, dynamic>>> getListMembersWithProfilesAndRoles(int listId) async {
-    // Select 'role' from list_members and nested profile fields from profiles.
-    // Using an alias 'user' for the nested profile object (user:profiles(...))
-    final response = await _client
-      .from('list_members')
-      .select('role, user:profiles(id, username, email)')
-      .eq('list_id', listId);
-
-    // If Supabase returns null or empty, return empty list
-    if (response == null) return <Map<String, dynamic>>[];
-
-    // Normalize to a predictable shape
     try {
+      // Select the role from list_members and the nested profile fields from profiles.
+      // We alias the nested profile object as 'user' so it's easier to normalize.
+      final response = await _client
+        .from('list_members')
+        .select('role, user:profiles(id, username, email)')
+        .eq('list_id', listId);
+
+      // If no data returned, return empty list
+      if (response == null) return <Map<String, dynamic>>[];
+
+      // Normalize the result into a predictable shape
       final rows = response as List<dynamic>;
-      final List<Map<String, dynamic>> members = rows.map<Map<String, dynamic>>((row) {
-        final userObj = (row as Map<String, dynamic>)['user'] ?? {};
-        return <String, dynamic>{
+      final members = <Map<String, dynamic>>[];
+
+      for (final raw in rows) {
+        if (raw is! Map<String, dynamic>) continue;
+        final role = raw['role'] as String?;
+        final userObj = raw['user'] as Map<String, dynamic>? ?? <String, dynamic>{};
+        members.add({
           'id': userObj['id']?.toString(),
-          'username': userObj['username'],
-          'email': userObj['email'],
-          'role': row['role'],
-        };
-      }).toList();
+          'username': userObj['username'] as String?,
+          'email': userObj['email'] as String?,
+          'role': role ?? 'member',
+        });
+      }
+
       return members;
-    } catch (e) {
-      // If something unexpected comes back, return an empty list instead of crashing
+    } on PostgrestException catch (e) {
+      // Log or surface the Postgrest error as appropriate for your app.
+      // Returning empty list so the UI won't crash; you can also rethrow if you'd prefer.
+      // print('getListMembersWithProfilesAndRoles error: ${e.message}');
+      return <Map<String, dynamic>>[];
+    } catch (_) {
       return <Map<String, dynamic>>[];
     }
   }
