@@ -318,7 +318,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   builder: (_) => ListDetailScreen(
                     listId: newList['id'].toString(), 
                     listName: newList['name'],
-                    ownerId: newlist['owner_id'] as String,
+                    ownerId: newList['owner_id'] as String,
                   ),
                 ),
               );

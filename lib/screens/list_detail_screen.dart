@@ -612,6 +612,8 @@ void _showMembersDialog() {
   // REQUIREMENT: Get the list's ownerId from the widget property
   final String listOwnerId = widget.ownerId; 
 
+  final bool isCurrentUserOwner = currentUserId == listOwnerId;
+  
   showDialog(
     context: context,
     builder: (context) {
