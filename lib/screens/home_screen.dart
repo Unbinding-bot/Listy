@@ -159,6 +159,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                     builder: (_) => ListDetailScreen(
                                       listId: listId.toString(), 
                                       listName: listName,
+                                      ownerId: list.owner_id as String,
                                     ),
                                   ),
                                 );
@@ -316,7 +317,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 MaterialPageRoute(
                   builder: (_) => ListDetailScreen(
                     listId: newList['id'].toString(), 
-                    listName: newList['name']
+                    listName: newList['name'],
+                    ownerId: list.owner_id as String,
                   ),
                 ),
               );
