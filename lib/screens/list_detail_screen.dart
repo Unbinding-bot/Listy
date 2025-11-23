@@ -1,10 +1,15 @@
 // lib/screens/list_detail_screen.dart
-// Merged and updated ListDetailScreen:
-// - Uses authoritative list data fetched from the DB after creation/opening
-// - Normalizes ID comparisons to avoid int/string mismatches
-// - Uses role lookup to determine if current user is owner (allows editing, adding members)
-// - Automatically prompts to edit the title when a newly-created "Untitled" list opens and the current user is the owner
-// - Preserves existing UI/formatting/reorder/item logic from your original file
+// Base file provided by the user with edits merged:
+// - Uses list_members role (via getCurrentUserRole) to determine owner permissions
+// - Members dialog expects member rows to include a 'role' field (owner/member)
+// - Fetches authoritative list name via getListById
+// - Normalizes ID comparisons
+// - Auto-opens edit-title dialog for newly-created/untitled lists when the current user is owner
+// NOTE: This file assumes your Supabase service provides:
+//   - Future<Map<String, dynamic>?> getListById(int listId)
+//   - Future<String?> getCurrentUserRole(int listId)
+//   - Future<List<Map<String, dynamic>>> getListMembersWithProfilesAndRoles(int listId)
+// If those helpers don't exist yet, add them to lib/services/supabase_service.dart.
 
 import 'package:flutter/material.dart';
 import '../services/supabase_service.dart';
@@ -25,7 +30,7 @@ class DrawingScreen extends StatelessWidget {
 class ListDetailScreen extends StatefulWidget {
   final String listId;
   final String listName;
-  final String ownerId; // <--- initial/optional ownerId passed from parent (may be optimistic)
+  final String ownerId; // legacy/optional - not used for authoritative owner checks
 
   const ListDetailScreen({
     super.key,
@@ -60,10 +65,7 @@ class _ListDetailScreenState extends State<ListDetailScreen> {
   // Local variable to allow the listName in the AppBar to change
   late String _localListName;
 
-  // Authoritative owner id loaded from DB (string)
-  String _authoritativeOwnerId = '';
-
-  // Track current user id and whether they are owner (derived from role or ownerId)
+  // Track current user id and whether they are owner (derived from list_members.role)
   String _currentUserId = '';
   bool _isCurrentUserOwner = false;
 
@@ -92,7 +94,7 @@ class _ListDetailScreenState extends State<ListDetailScreen> {
       }
     });
 
-    // Fetch authoritative list owner and the current user's role for this list
+    // Fetch authoritative list name and the current user's role for this list
     _initOwnershipAndName();
   }
 
@@ -105,17 +107,17 @@ class _ListDetailScreenState extends State<ListDetailScreen> {
 
   Future<void> _initOwnershipAndName() async {
     try {
+      // getListById: used for authoritative name (lists table)
       final listRow = await dbService.getListById(int.parse(widget.listId));
+      // getCurrentUserRole: returns 'owner' | 'member' | null (based on list_members)
       final role = await dbService.getCurrentUserRole(int.parse(widget.listId));
 
       if (!mounted) return;
 
       setState(() {
-        // If DB returned values use them, otherwise keep the widget-provided fallback
-        _authoritativeOwnerId = listRow?['owner_id']?.toString() ?? widget.ownerId;
         _localListName = listRow?['name'] ?? widget.listName;
         _currentUserId = dbService.currentUser?.id ?? '';
-        _isCurrentUserOwner = (role == 'owner') || _idsEqual(_authoritativeOwnerId, _currentUserId);
+        _isCurrentUserOwner = (role == 'owner');
       });
 
       // If the list looks newly-created/untitled and the current user is owner,
@@ -371,11 +373,10 @@ class _ListDetailScreenState extends State<ListDetailScreen> {
     );
   }
 
-  // Dialog to view, add, and remove members - uses authoritative owner id if available
+  // Dialog to view, add, and remove members - uses list_members.role for owner detection
   void _showMembersDialog() {
-    final String listOwnerId = _authoritativeOwnerId.isNotEmpty ? _authoritativeOwnerId : widget.ownerId;
     final currentUserId = dbService.currentUser?.id;
-    final bool isCurrentUserOwner = _isCurrentUserOwner || _idsEqual(currentUserId, listOwnerId);
+    final isCurrentUserOwner = _isCurrentUserOwner;
 
     // Use a unique key to force the FutureBuilder to rebuild every time the dialog is shown
     final dialogKey = UniqueKey();
@@ -389,8 +390,8 @@ class _ListDetailScreenState extends State<ListDetailScreen> {
           content: SizedBox(
             width: double.maxFinite,
             child: FutureBuilder<List<Map<String, dynamic>>>(
-              // The function should return a List<Map<String, dynamic>> where each Map is a user's profile
-              future: dbService.getListMembersWithProfiles(int.parse(widget.listId)),
+              // IMPORTANT: this method should return members with 'role' and profile fields
+              future: dbService.getListMembersWithProfilesAndRoles(int.parse(widget.listId)),
               builder: (context, snapshot) {
                 if (snapshot.connectionState == ConnectionState.waiting) {
                   return const Center(child: CircularProgressIndicator());
@@ -399,9 +400,9 @@ class _ListDetailScreenState extends State<ListDetailScreen> {
                   return Center(child: Text('Error: ${snapshot.error}'));
                 }
 
-                // snapshot.data is a List of PROFILES (id, username)
+                // snapshot.data is a List of maps containing id, username, role, etc.
                 final profiles = snapshot.data ?? [];
-                final currentUserId = dbService.currentUser?.id;
+                final currentUserIdLocal = dbService.currentUser?.id;
 
                 return ListView.builder(
                   shrinkWrap: true,
@@ -409,17 +410,16 @@ class _ListDetailScreenState extends State<ListDetailScreen> {
                   itemBuilder: (context, index) {
                     final memberProfile = profiles[index];
 
-                    // Safely access username from the profiles table structure
                     final memberUserId = memberProfile['id']?.toString() ?? '';
                     final username = memberProfile['username'] as String? ?? 'Unknown User';
+                    final role = memberProfile['role'] as String? ?? 'member';
 
-                    // Determine role by comparing the member's ID with the list's ownerId
-                    final isOwner = _idsEqual(memberUserId, listOwnerId);
-                    final isSelf = _idsEqual(memberUserId, currentUserId);
+                    final isOwner = role == 'owner';
+                    final isSelf = _idsEqual(memberUserId, currentUserIdLocal);
 
                     return ListTile(
                       title: Text(username + (isSelf ? ' (You)' : '')),
-                      // Display the role based on the new logic
+                      // Display the role based on the returned role
                       subtitle: Text(isOwner ? 'Owner' : 'Member'),
                       trailing: Row(
                         mainAxisSize: MainAxisSize.min,
@@ -664,8 +664,8 @@ class _ListDetailScreenState extends State<ListDetailScreen> {
           },
         ),
         IconButton(
-          icon: const Icon(Icons.people),
-          onPressed: _showMembersDialog,
+          icon: const Icon(Icons.people), // Updated icon
+          onPressed: _showMembersDialog, // New handler
         ),
         IconButton(
           icon: const Icon(Icons.share),
@@ -831,20 +831,20 @@ class _ListDetailScreenState extends State<ListDetailScreen> {
                                   GestureDetector(
                                     onTap: isSelecting
                                         ? () => _toggleSelection(itemId) // If selecting, tap toggles selection
-                                        : () async {
-                                            // Otherwise, tap toggles completion
-                                            await dbService.updateItem(itemId, {'is_completed': !isCompleted});
+                                        : () async { // Otherwise, tap toggles completion
+                                            await dbService.updateItem(
+                                              itemId,
+                                              {'is_completed': !isCompleted},
+                                            );
                                           },
                                     child: Padding(
                                       padding: const EdgeInsets.symmetric(horizontal: 16.0),
                                       child: isSelecting
-                                          ? Icon(
-                                              // Show selection indicator
+                                          ? Icon( // Show selection indicator
                                               isSelected ? Icons.check_circle : Icons.circle_outlined,
                                               color: Theme.of(context).colorScheme.primary,
                                             )
-                                          : Icon(
-                                              // Show completion checkbox
+                                          : Icon( // Show completion checkbox
                                               isCompleted ? Icons.check_box : Icons.check_box_outline_blank,
                                               color: isCompleted ? Theme.of(context).colorScheme.primary : Colors.grey,
                                             ),
@@ -874,7 +874,10 @@ class _ListDetailScreenState extends State<ListDetailScreen> {
                                         if (trimmedTitle.isEmpty) {
                                           await dbService.deleteItem(itemId);
                                         } else {
-                                          await dbService.updateItem(itemId, {'title': trimmedTitle});
+                                          await dbService.updateItem(
+                                            itemId,
+                                            {'title': trimmedTitle},
+                                          );
                                         }
                                       },
                                     ),
@@ -918,6 +921,5 @@ class _ListDetailScreenState extends State<ListDetailScreen> {
   }
 }
 
-
-//yk this goes to show how much I like you and how much I want to do fun stuff with you
-//haha lol you probably wont be reading this though
+// yk this goes to show how much I like you and how much I want to do fun stuff with you
+// haha lol you probably wont be reading this though
