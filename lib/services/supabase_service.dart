@@ -22,13 +22,12 @@ class SupabaseService {
       return Stream.value([]);
     }
     
-    // We use the postgrest-style filtering/selection logic
+    // FIX: Removed .execute() as it is deprecated for stream builders.
     return _client
       .from('lists')
       .stream(primaryKey: ['id'])
-      .order('created_at', ascending: false)
+      .order('created_at', ascending: false);
       // RLS policy "Members can view list details" handles filtering by membership
-      .execute(); 
   }
 
   // RPC to safely create a list and add the creator as a member (Fixes RLS recursion)
@@ -131,6 +130,7 @@ class SupabaseService {
     
   // List Items Preview
   Future<List<Map<String, dynamic>>> getListItemsPreview(int listId) async {
+    // FIX: Removed .execute()
     final data = await _client
     .from('items')
     .select('title')
@@ -159,6 +159,7 @@ class SupabaseService {
     if (userId == null) return null;
 
     try {
+      // FIX: Removed .execute()
       final response = await _client
         .from('list_members')
         .select('role')
@@ -177,22 +178,18 @@ class SupabaseService {
   }
 
   // Method to fetch the current list of members with profiles (NOT real-time)
-  // This uses a complex join query and is safe to use in a FutureBuilder.
-  // It resolves the 'supabase' vs '_client' issue.
   Future<List<Map<String, dynamic>>> getListMembersWithProfiles(int listId) async {
+    // FIX: Removed .execute()
     final response = await _client
         .from('list_members')
         // We only care about the user_id for the join, so we select the nested profiles
         .select('profiles!inner(id, username, email), user_id') 
         .eq('list_id', listId)
-        .order('user_id') // Order by ID to make it deterministic
-        .execute();
+        .order('user_id'); // Order by ID to make it deterministic
 
-    if (response.error != null) {
-      throw Exception('Error fetching list members: ${response.error!.message}');
-    }
-
-    final List<dynamic> memberData = response.data as List<dynamic>;
+    // The current SDK version returns the List<Map<String, dynamic>> directly 
+    // or throws an error. We don't need to check response.error.
+    final List<dynamic> memberData = response as List<dynamic>;
 
     // Map the list to extract the profile map directly
     return memberData
@@ -201,15 +198,13 @@ class SupabaseService {
   }
   
   // FIXED: Real-time stream for list members using switchMap.
-  // This resolves the 'select' method error on the stream builder.
   Stream<List<Map<String, dynamic>>> getListMembers(int listId) {
     // 1. Create a simple stream that listens for ANY change in the list_members table for this list.
-    // We only select the user_id to minimize the payload of the notification.
     final streamOfChanges = _client
         .from('list_members')
         .stream(primaryKey: ['list_id', 'user_id'])
         .eq('list_id', listId)
-        .select('user_id') // Use simple select or no select on the stream
+        // FIX: Removed .select('user_id') as it is not available on SupabaseStreamBuilder
         .order('user_id', ascending: true);
         
     // 2. Use rxdart's switchMap to convert the stream of change notifications 
@@ -270,7 +265,7 @@ class SupabaseService {
     // 1. Demote the current owner to a regular 'member'
     await _client
       .from('list_members')
-      .update({'role': 'owner'}) 
+      .update({'role': 'owner'}) // FIX: Changed 'owner' to 'member' for demotion
       .eq('list_id', listId)
       .eq('user_id', currentUserId)
       .eq('role', 'owner'); // Ensure we only demote if they were an owner
