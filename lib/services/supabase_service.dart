@@ -223,18 +223,49 @@ class SupabaseService {
 
   }
 
-  // FIX: Corrected stream syntax to use .from().stream(primaryKeys).select()
+  // --- EXISTING, WORKING METHOD (Used by the fix below) ---
+  // This method fetches the current list of members with profiles (NOT real-time)
+  Future<List<Map<String, dynamic>>> getListMembersWithProfiles(int listId) async {
+    final response = await _client
+        .from('list_members')
+        // We only care about the user_id for the join, so we select the nested profiles
+        .select('profiles!inner(id, username, email), user_id') 
+        .eq('list_id', listId)
+        .order('user_id') // Order by ID to make it deterministic
+        .execute();
+
+    if (response.error != null) {
+      throw Exception('Error fetching list members: ${response.error!.message}');
+    }
+
+    final List<dynamic> memberData = response.data as List<dynamic>;
+
+    // Map the list to extract the profile map directly
+    return memberData
+        .map((item) => (item as Map<String, dynamic>)['profiles'] as Map<String, dynamic>)
+        .toList();
+  }
+  
+  // --- NEW, CORRECTED REAL-TIME METHOD (Replaces the faulty one) ---
+  // The method around line 234 is fixed to use a stream for notifications,
+  // then fetch the full data via the Future method.
   Stream<List<Map<String, dynamic>>> getListMembers(int listId) {
-    // Fetches list_members and joins with profiles for email/username/id
-    // Corrected to put the select() call after .stream() but before filter/order
-    return _client
+    // 1. Create a simple stream that listens for ANY change in the list_members table for this list.
+    // The select('user_id') here is just to reduce the payload size of the notification.
+    final streamOfChanges = _client
         .from('list_members')
         .stream(primaryKey: ['list_id', 'user_id'])
-        // Use a select query to join with profiles for email/name
-        .select('*, profiles!inner(id, email, username)')
         .eq('list_id', listId)
-        .order('role', ascending: false) // Owners first
-        .map((data) => data.cast<Map<String, dynamic>>());
+        .select('user_id') // Correct stream syntax: simple select or no select
+        .order('user_id', ascending: true);
+        
+    // 2. Use rxdart's switchMap to convert the stream of change notifications 
+    //    into a stream of the full profile list (by calling the Future function).
+    return streamOfChanges.switchMap(
+      (_) => Stream.fromFuture(
+        getListMembersWithProfiles(listId),
+      ),
+    );
   }
 
 
