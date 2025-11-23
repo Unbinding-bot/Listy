@@ -15,6 +15,7 @@ dependencies:
   supabase_flutter: ^2.8.0
   provider: ^6.1.2 # For state management
   shared_preferences: ^2.2.2 # To save theme locally
+  rxdart: ^0.27.7 #something
 
 dev_dependencies:
   flutter_test:
