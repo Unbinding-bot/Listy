@@ -159,7 +159,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                     builder: (_) => ListDetailScreen(
                                       listId: listId.toString(), 
                                       listName: listName,
-                                      ownerId: list.owner_id as String,
+                                      ownerId: list['owner_id'] as String,
                                     ),
                                   ),
                                 );
@@ -318,7 +318,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   builder: (_) => ListDetailScreen(
                     listId: newList['id'].toString(), 
                     listName: newList['name'],
-                    ownerId: list.owner_id as String,
+                    ownerId: newlist['owner_id'] as String,
                   ),
                 ),
               );
