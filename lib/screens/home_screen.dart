@@ -430,30 +430,29 @@ class _HomeScreenState extends State<HomeScreen> {
               }
               try {
                 final newList = await dbService.createNewList("Untitled List");
-                
+
                 if (context.mounted) {
                   Navigator.push(
                     context,
                     MaterialPageRoute(
                       builder: (_) => ListDetailScreen(
-                        listId: newList['id']?.toString() ?? '0', 
-                        listName: newList['name'] ?? 'Untitled List', 
-                        ownerId: (newList['owner_id'] as String?) ?? 'unknown_owner', 
+                        listId: newList['id']?.toString() ?? '0',
+                        listName: newList['name'] ?? 'Untitled List',
+                        ownerId: (newList['owner_id'] != null) ? newList['owner_id'].toString() : '',
                       ),
                     ),
                   );
-                  
+
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(content: Text('List created successfully!')),
                   );
                 }
-                
               } catch (e) {
-                 if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Error creating list: $e')),
-                    );
-                 }
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Failed to create list: ${e.toString()}')),
+                  );
+                }
               }
             },
         child: isSelecting || _isReordering ? const Icon(Icons.close) : const Icon(Icons.add),

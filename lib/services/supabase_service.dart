@@ -37,17 +37,45 @@ class SupabaseService {
       throw Exception('User not logged in.');
     }
 
-    // Calls the 'create_list_and_add_member' SQL function
+    // Calls the 'create_list_and_add_member' SQL function which returns the new list id
     final response = await _client.rpc(
       'create_list_and_add_member',
-      params: {
-        'list_name': listName,
-      },
+      params: {'list_name': listName},
     );
 
-    // The RPC function returns a single JSON object (e.g., {'id': 1234})
     final listId = response['id'];
-    return {'id': listId.toString(), 'name': listName, 'owner_id': currentUserId};
+    if (listId == null) {
+      throw Exception('Failed to create list.');
+    }
+
+    // Fetch the authoritative list row from the lists table so the client has the real owner_id and name
+    final listRow = await _client
+        .from('lists')
+        .select('id, name, owner_id')
+        .eq('id', listId)
+        .single();
+
+    // Return the authoritative row (convert id to string to make later usage simpler)
+    return {
+      'id': listRow['id']?.toString(),
+      'name': listRow['name'],
+      'owner_id': listRow['owner_id']?.toString(),
+    };
+  }
+
+  // NEW helper: fetch a list row by id (used by detail screen to get authoritative owner & name)
+  Future<Map<String, dynamic>?> getListById(int listId) async {
+    final response = await _client
+        .from('lists')
+        .select('id, name, owner_id')
+        .eq('id', listId)
+        .maybeSingle(); // maybeSingle returns null if not found
+    if (response == null) return null;
+    return {
+      'id': response['id']?.toString(),
+      'name': response['name'],
+      'owner_id': response['owner_id']?.toString(),
+    };
   }
 
   // NEW: Function to update list name
