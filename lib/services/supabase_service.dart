@@ -228,10 +228,14 @@ class SupabaseService {
 
   Future<List<Map<String, dynamic>>> getListMembersWithProfilesAndRoles(int listId) async {
     try {
+      // Prefer a direct join from list_members -> profiles to get role + profile fields
       final response = await _client
-          .from('list_members')
-          .select('role, user:profiles(id, username, email)')
-          .eq('list_id', listId);
+        .from('list_members')
+        .select('role, user:profiles(id, username, email)')
+        .eq('list_id', listId);
+
+      // Debugging: print raw response in logs if you need to inspect it
+      // print('getListMembers raw response: $response');
 
       if (response == null) return <Map<String, dynamic>>[];
 
@@ -250,10 +254,12 @@ class SupabaseService {
         });
       }
       return members;
-    } catch (_) {
+    } catch (e, st) {
+      // Print for debugging in dev; handle/log properly in production
+      print('getListMembersWithProfilesAndRoles error: $e\n$st');
       return <Map<String, dynamic>>[];
     }
-  }
+
   
   // FIXED: Real-time stream for list members using switchMap.
   Stream<List<Map<String, dynamic>>> getListMembers(int listId) {
