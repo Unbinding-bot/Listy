@@ -174,7 +174,29 @@ class SupabaseService {
       rethrow;
     }
   }
+  Future<List<Map<String, dynamic>>> getListMembersWithProfiles(int listId) async {
+   // 1. Select the user_id from the list_members table
+    // 2. Perform a join (inner join is default) with the profiles table
+    //    where 'user_id' in list_members matches 'id' in profiles.
+    // 3. We use the .eq filter to match the list_id.
 
+    // The 'profiles!inner(id, username)' syntax ensures we only return
+    // the profile details for the users linked to this list.
+    final response = await supabase.from('list_members').select('profiles!inner(id, username)').eq('list_id', listId).execute();
+
+    if (response.error != null) {
+      throw Exception('Error fetching list members: ${response.error!.message}');
+    }
+
+    // The data structure will be List<Map<String, dynamic>> where each map
+    // contains a single key 'profiles' whose value is the user profile map.
+    final List<dynamic> memberData = response.data as List<dynamic>;
+
+    // Map the list to extract the profile map directly for easier consumption
+    return memberData
+        .map((item) => (item as Map<String, dynamic>)['profiles'] as Map<String, dynamic>)
+        .toList();
+  }
 
   /// Finds user by email and adds them as a list member using an RPC (Required due to RLS).
   Future<void> addListMember(int listId, String memberEmail) async {
