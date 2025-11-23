@@ -201,9 +201,10 @@ class SupabaseService {
 
   }
 
-  // Fixing the discrepancy: Using a streaming join here for real-time member updates
+  // FIX: Corrected stream syntax to use .from().stream(primaryKeys).select()
   Stream<List<Map<String, dynamic>>> getListMembers(int listId) {
     // Fetches list_members and joins with profiles for email/username/id
+    // Corrected to put the select() call after .stream() but before filter/order
     return _client
         .from('list_members')
         .stream(primaryKey: ['list_id', 'user_id'])

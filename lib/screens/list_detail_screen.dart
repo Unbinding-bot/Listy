@@ -19,7 +19,7 @@ body: const Center(child: Text("Drawing Canvas and Tools Go Here")),
 class ListDetailScreen extends StatefulWidget {
   final String listId;
   final String listName;
-  final String ownerId; // <--- FIX 1: NEW REQUIRED FIELD FOR OWNER CHECK
+  final String ownerId; // <--- NEW REQUIRED FIELD FOR OWNER CHECK
   
 
   const ListDetailScreen({
@@ -261,23 +261,23 @@ final titleController = TextEditingController(text: _localListName);
 showDialog(
 context: context,
 builder: (context) {
- return AlertDialog(
- title: const Text('Edit List Name'),
- content: TextField(
- controller: titleController,
- decoration: const InputDecoration(hintText: "Enter new list name"),
- ),
- actions: [
- TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
- ElevatedButton(
- onPressed: () {
+  return AlertDialog(
+  title: const Text('Edit List Name'),
+  content: TextField(
+  controller: titleController,
+  decoration: const InputDecoration(hintText: "Enter new list name"),
+  ),
+  actions: [
+  TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+  ElevatedButton(
+  onPressed: () {
   Navigator.pop(context);
   _updateListName(titleController.text); // Call the update function
- },
- child: const Text('Save'),
- ),
- ],
- );
+  },
+  child: const Text('Save'),
+  ),
+  ],
+  );
 },
 );
 }
@@ -287,20 +287,27 @@ builder: (context) {
 Widget _buildNormalAppBar() {
 return AppBar(
 title: GestureDetector(
- onTap: _showEditTitleDialog, // <--- Title tap now opens the edit dialog
- child: Text(_localListName), // <--- Using local name
+  onTap: widget.ownerId == dbService.currentUser?.id ? _showEditTitleDialog : null, // Only allow owner to edit
+  child: Text(
+    _localListName, // <--- Using local name
+    style: TextStyle(
+      // Optional: change style to indicate editable/non-editable
+      decoration: widget.ownerId == dbService.currentUser?.id ? TextDecoration.underline : null,
+      decorationStyle: TextDecorationStyle.dashed,
+    )
+  ), 
 ),
 actions: [
- IconButton(
- icon: const Icon(Icons.brush),
- onPressed: () {
- Navigator.push(context, MaterialPageRoute(builder: (_) => const DrawingScreen()));
- },
- ),
- IconButton(
- icon: const Icon(Icons.people), // Updated icon
- onPressed: _showMembersDialog, // New handler
- ),
+  IconButton(
+  icon: const Icon(Icons.brush),
+  onPressed: () {
+  Navigator.push(context, MaterialPageRoute(builder: (_) => const DrawingScreen()));
+  },
+  ),
+  IconButton(
+  icon: const Icon(Icons.people), // Updated icon
+  onPressed: _showMembersDialog, // New handler
+  ),
 ],
 );
 }
@@ -345,7 +352,7 @@ IconButton(
 icon: const Icon(Icons.format_size),
 onPressed: () {
 setState(() {
- _currentFontSize = _currentFontSize == 16.0 ? 20.0 : 16.0;
+  _currentFontSize = _currentFontSize == 16.0 ? 20.0 : 16.0;
 });
 },
 tooltip: 'Toggle Font Size',
@@ -452,35 +459,35 @@ children: [
 // 1. The main list of items (Now ReorderableListView)
 Expanded(
 child: _items.isEmpty
- ? const Center(child: Text("Start by adding a new item below."))
- : ReorderableListView.builder(
- padding: const EdgeInsets.only(top: 8.0, bottom: 8.0),
- itemCount: _items.length,
- onReorder: _onReorder,
- itemBuilder: (context, index) {
- final item = _items[index];
- final itemId = item['id'] as int;
- final isCompleted = item['is_completed'] as bool? ?? false;
- final isSelected = _selectedItemIds.contains(itemId);
+  ? const Center(child: Text("Start by adding a new item below."))
+  : ReorderableListView.builder(
+  padding: const EdgeInsets.only(top: 8.0, bottom: 8.0),
+  itemCount: _items.length,
+  onReorder: _onReorder,
+  itemBuilder: (context, index) {
+  final item = _items[index];
+  final itemId = item['id'] as int;
+  final isCompleted = item['is_completed'] as bool? ?? false;
+  final isSelected = _selectedItemIds.contains(itemId);
   
-   // NEW: Read styling properties
-   final isBold = item['is_bold'] as bool? ?? false;
-   final isItalic = item['is_italic'] as bool? ?? false;
-   // Default color to theme if 'text_color' is missing or null
-   final colorHex = item['text_color'] as String?; // Allow null/missing
-   final itemColor = _hexToColor(colorHex); // Uses theme default if hex is null/invalid
+    // NEW: Read styling properties
+    final isBold = item['is_bold'] as bool? ?? false;
+    final isItalic = item['is_italic'] as bool? ?? false;
+    // Default color to theme if 'text_color' is missing or null
+    final colorHex = item['text_color'] as String?; // Allow null/missing
+    final itemColor = _hexToColor(colorHex); // Uses theme default if hex is null/invalid
 
- // Wrap each item in a LongPress and Tap Detector
- return GestureDetector(
- key: ValueKey(itemId), // Required for ReorderableListView
- onLongPress: () => _toggleSelection(itemId),
- onTap: isSelecting ? () => _toggleSelection(itemId) : null, // Only toggle selection if mode is active
+  // Wrap each item in a LongPress and Tap Detector
+  return GestureDetector(
+  key: ValueKey(itemId), // Required for ReorderableListView
+  onLongPress: () => _toggleSelection(itemId),
+  onTap: isSelecting ? () => _toggleSelection(itemId) : null, // Only toggle selection if mode is active
 
- child: Container(
- color: isSelected ? Theme.of(context).colorScheme.primary.withOpacity(0.1) : null,
- child: Padding(
- padding: const EdgeInsets.symmetric(vertical: 4.0),
- child: Row(
+  child: Container(
+  color: isSelected ? Theme.of(context).colorScheme.primary.withOpacity(0.1) : null,
+  child: Padding(
+  padding: const EdgeInsets.symmetric(vertical: 4.0),
+  child: Row(
   children: [
   // LEFT SIDE: Selection/Checkbox Toggling Zone
   GestureDetector(
@@ -516,10 +523,10 @@ child: _items.isEmpty
   fontSize: _currentFontSize,
   decoration: isCompleted ? TextDecoration.lineThrough : null,
   
-     // NEW STYLING & FIX FOR DARK MODE TEXT COLOR
-     color: isCompleted ? itemColor.withOpacity(0.6) : itemColor,
-     fontWeight: isBold ? FontWeight.bold : FontWeight.normal,
-     fontStyle: isItalic ? FontStyle.italic : FontStyle.normal,
+      // NEW STYLING & FIX FOR DARK MODE TEXT COLOR
+      color: isCompleted ? itemColor.withOpacity(0.6) : itemColor,
+      fontWeight: isBold ? FontWeight.bold : FontWeight.normal,
+      fontStyle: isItalic ? FontStyle.italic : FontStyle.normal,
   ),
   decoration: const InputDecoration(
   border: InputBorder.none,
@@ -540,33 +547,33 @@ child: _items.isEmpty
   ),
   ),
   ],
- ),
- ),
- ),
- );
- },
- ),
+  ),
+  ),
+  ),
+  );
+  },
+  ),
 ),
 
 // 2. Add New Item Input Field
 if (!isSelecting) // Hide input field when in selection mode
 Padding(
- padding: const EdgeInsets.all(8.0),
- child: TextField(
- controller: _addItemController,
- focusNode: _addItemFocusNode,
- decoration: InputDecoration(
- hintText: "New item...",
- suffixIcon: IconButton(
- icon: const Icon(Icons.add),
- onPressed: () => _addNewItem(_addItemController.text),
- ),
- border: const OutlineInputBorder(),
- ),
- onSubmitted: (value) {
- _addNewItem(value);
- },
- ),
+  padding: const EdgeInsets.all(8.0),
+  child: TextField(
+  controller: _addItemController,
+  focusNode: _addItemFocusNode,
+  decoration: InputDecoration(
+  hintText: "New item...",
+  suffixIcon: IconButton(
+  icon: const Icon(Icons.add),
+  onPressed: () => _addNewItem(_addItemController.text),
+  ),
+  border: const OutlineInputBorder(),
+  ),
+  onSubmitted: (value) {
+  _addNewItem(value);
+  },
+  ),
 ),
 ],
 ),
@@ -582,29 +589,29 @@ final shareController = TextEditingController();
 showDialog(
 context: context,
 builder: (context) {
- return AlertDialog(
- title: Text('Share "${_localListName}"'),
- content: TextField(
- controller: shareController,
- decoration: const InputDecoration(
- hintText: "Enter user's email address",
- ),
- keyboardType: TextInputType.emailAddress,
- ),
- actions: [
- TextButton(
- onPressed: () => Navigator.pop(context),
- child: const Text('Cancel'),
- ),
- ElevatedButton(
- onPressed: () async {
+  return AlertDialog(
+  title: Text('Share "${_localListName}"'),
+  content: TextField(
+  controller: shareController,
+  decoration: const InputDecoration(
+  hintText: "Enter user's email address",
+  ),
+  keyboardType: TextInputType.emailAddress,
+  ),
+  actions: [
+  TextButton(
+  onPressed: () => Navigator.pop(context),
+  child: const Text('Cancel'),
+  ),
+  ElevatedButton(
+  onPressed: () async {
   Navigator.pop(context);
   await _addMember(shareController.text);
- },
- child: const Text('Share'),
- ),
- ],
- );
+  },
+  child: const Text('Share'),
+  ),
+  ],
+  );
 },
 );
 }
@@ -617,10 +624,15 @@ void _showMembersDialog() {
 
   final bool isCurrentUserOwner = currentUserId == listOwnerId;
 
+  // Use a unique key to force the FutureBuilder to rebuild every time the dialog is shown
+  // This is a simple way to ensure the data is always fresh when the dialog opens.
+  final dialogKey = UniqueKey(); 
+
   showDialog(
     context: context,
     builder: (context) {
       return AlertDialog(
+        key: dialogKey, // Assign the key here
         title: const Text('List Members'),
         content: SizedBox(
           width: double.maxFinite,
@@ -707,7 +719,7 @@ void _showMembersDialog() {
         ],
       );
     },
-  ).then((_) => setState(() {})); // Reload on close to refresh member list
+  ); // Removed the .then((_) => setState({})); since the unique key will force a rebuild when the dialog opens.
 }
 
 // Helper dialog for adding a member
@@ -716,29 +728,33 @@ final shareController = TextEditingController();
 showDialog(
 context: context,
 builder: (context) {
- return AlertDialog(
- title: Text('Add Member to "${_localListName}"'),
- content: TextField(
- controller: shareController,
- decoration: const InputDecoration(
- hintText: "Enter user's email address",
- ),
- keyboardType: TextInputType.emailAddress,
- ),
- actions: [
- TextButton(
- onPressed: () => Navigator.pop(context),
- child: const Text('Cancel'),
- ),
- ElevatedButton(
- onPressed: () async {
-  Navigator.pop(context);
+  return AlertDialog(
+  title: Text('Add Member to "${_localListName}"'),
+  content: TextField(
+  controller: shareController,
+  decoration: const InputDecoration(
+  hintText: "Enter user's email address",
+  ),
+  keyboardType: TextInputType.emailAddress,
+  ),
+  actions: [
+  TextButton(
+  onPressed: () => Navigator.pop(context),
+  child: const Text('Cancel'),
+  ),
+  ElevatedButton(
+  onPressed: () async {
+  // Close the add dialog
+  Navigator.pop(context); 
+  // Call add member
   await _addMember(shareController.text);
- },
- child: const Text('Add'),
- ),
- ],
- );
+  // Re-open the members dialog to show the updated list
+  _showMembersDialog();
+  },
+  child: const Text('Add'),
+  ),
+  ],
+  );
 },
 );
 }
@@ -749,18 +765,17 @@ if (trimmedEmail.isEmpty) return;
 
 try {
 await dbService.addListMember(int.parse(widget.listId), trimmedEmail);
-// Refresh the UI after successful addition
-setState(() {});
+// No need to call setState here as the dialog will be manually reopened after this Future completes
 if (mounted) {
- ScaffoldMessenger.of(context).showSnackBar(
- SnackBar(content: Text('Member added: $trimmedEmail')),
- );
+  ScaffoldMessenger.of(context).showSnackBar(
+  SnackBar(content: Text('Member added: $trimmedEmail')),
+  );
 }
 } catch (e) {
 if (mounted) {
- ScaffoldMessenger.of(context).showSnackBar(
- SnackBar(content: Text('Failed to add member: ${e.toString()}')),
- );
+  ScaffoldMessenger.of(context).showSnackBar(
+  SnackBar(content: Text('Failed to add member: ${e.toString()}')),
+  );
 }
 }
 }
@@ -768,25 +783,27 @@ if (mounted) {
 Future<void> _removeMember(String userId, String username) async {
 try {
 await dbService.removeListMember(int.parse(widget.listId), userId);
-setState(() {}); // Refresh the UI
+
 if (mounted) {
- // Re-open the members dialog to show the updated list if the user didn't leave the list
-   // If the current user is leaving, they will be navigated back by the list stream listener
-   if (userId != dbService.currentUser?.id) {
-       Navigator.pop(context); // Close the members dialog
-       _showMembersDialog(); // Refresh the list by reopening the dialog
-   } else {
-      // If the user removed themselves, they will be redirected to the home screen by the stream listener
-   }
- ScaffoldMessenger.of(context).showSnackBar(
- SnackBar(content: Text('$username removed from list.')),
- );
+  // Only try to re-open the members dialog if the current user didn't remove themselves
+  if (userId != dbService.currentUser?.id) {
+    // Close the current dialog instance
+    Navigator.pop(context); 
+    // Re-open the members dialog to show the updated list
+    _showMembersDialog();
+  } else {
+    // If the user removed themselves, the list stream listener will handle navigation back
+    // No need to explicitly close the dialog here, as navigation will handle it.
+  }
+  ScaffoldMessenger.of(context).showSnackBar(
+  SnackBar(content: Text('$username removed from list.')),
+  );
 }
 } catch (e) {
 if (mounted) {
- ScaffoldMessenger.of(context).showSnackBar(
- SnackBar(content: Text('Failed to remove member: ${e.toString()}')),
- );
+  ScaffoldMessenger.of(context).showSnackBar(
+  SnackBar(content: Text('Failed to remove member: ${e.toString()}')),
+  );
 }
 }
 }
@@ -795,45 +812,46 @@ void _showOwnerTransferConfirmation(String userId, String username) {
 showDialog(
 context: context,
 builder: (context) {
- return AlertDialog(
- title: const Text('Transfer Ownership'),
- content: Text.rich(
+  return AlertDialog(
+  title: const Text('Transfer Ownership'),
+  content: Text.rich(
     TextSpan(
-     text: 'Are you sure you want to make ',
-     children: [
-      TextSpan(
-       text: username,
-       style: const TextStyle(fontWeight: FontWeight.bold),
-      ),
-      const TextSpan(
-       text: ' the new list owner? This action is ',
-      ),
-      const TextSpan(
-       text: 'not reversible',
-       style: TextStyle(fontWeight: FontWeight.bold, color: Colors.red),
-      ),
-      const TextSpan(
-       text: ' and you will be demoted to a regular member.',
-      ),
-     ]
+      text: 'Are you sure you want to make ',
+      children: [
+       TextSpan(
+        text: username,
+        style: const TextStyle(fontWeight: FontWeight.bold),
+       ),
+       const TextSpan(
+        text: ' the new list owner? This action is ',
+       ),
+       const TextSpan(
+        text: 'not reversible',
+        style: TextStyle(fontWeight: FontWeight.bold, color: Colors.red),
+       ),
+       const TextSpan(
+        text: ' and you will be demoted to a regular member.',
+       ),
+       ]
     ),
-   ),
- actions: [
- TextButton(
- onPressed: () => Navigator.pop(context),
- child: const Text('Cancel'),
- ),
- ElevatedButton(
- style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
- onPressed: () async {
+    ),
+  actions: [
+  TextButton(
+  onPressed: () => Navigator.pop(context),
+  child: const Text('Cancel'),
+  ),
+  ElevatedButton(
+  style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+  onPressed: () async {
   Navigator.pop(context); // Close confirmation dialog
   await _transferOwnership(userId, username);
-  Navigator.pop(context); // Close members dialog
- },
- child: const Text('Transfer Ownership', style: TextStyle(color: Colors.white)),
- ),
- ],
- );
+  // Re-open the members dialog to show the updated owner status
+  _showMembersDialog();
+  },
+  child: const Text('Transfer Ownership', style: TextStyle(color: Colors.white)),
+  ),
+  ],
+  );
 },
 );
 }
@@ -841,17 +859,25 @@ builder: (context) {
 Future<void> _transferOwnership(String userId, String username) async {
 try {
 await dbService.transferOwnership(int.parse(widget.listId), userId);
-setState(() {}); // Refresh the UI
+// The list stream listener in the home screen will handle the change of ownership
+// and might trigger a refresh or redraw of this screen if the list is still valid for the current user.
 if (mounted) {
- ScaffoldMessenger.of(context).showSnackBar(
- SnackBar(content: Text('Ownership transferred to $username!')),
- );
+  ScaffoldMessenger.of(context).showSnackBar(
+  SnackBar(content: Text('Ownership transferred to $username!')),
+  );
+  // Important: Update the local state of the list name and ownerId after successful transfer
+  // We rely on the parent widget rebuilding this screen with the new ownerId, but let's
+  // force a state update just to be safe.
+  setState(() {
+    // Note: We can't update widget.ownerId, but we can trigger a rebuild, 
+    // and rely on the parent state to reflect the new owner.
+  });
 }
 } catch (e) {
 if (mounted) {
- ScaffoldMessenger.of(context).showSnackBar(
- SnackBar(content: Text('Failed to transfer ownership: ${e.toString()}')),
- );
+  ScaffoldMessenger.of(context).showSnackBar(
+  SnackBar(content: Text('Failed to transfer ownership: ${e.toString()}')),
+  );
 }
 }
 }
