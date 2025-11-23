@@ -233,6 +233,36 @@ class SupabaseService {
     // Return the list of profiles (e.g., [{'id': '...', 'username': 'user1'}, ...])
     return (profiles as List).cast<Map<String, dynamic>>();
   }
+
+  Future<List<Map<String, dynamic>>> getListMembersWithProfilesAndRoles(int listId) async {
+    // Select 'role' from list_members and nested profile fields from profiles.
+    // Using an alias 'user' for the nested profile object (user:profiles(...))
+    final response = await _client
+      .from('list_members')
+      .select('role, user:profiles(id, username, email)')
+      .eq('list_id', listId);
+
+    // If Supabase returns null or empty, return empty list
+    if (response == null) return <Map<String, dynamic>>[];
+
+    // Normalize to a predictable shape
+    try {
+      final rows = response as List<dynamic>;
+      final List<Map<String, dynamic>> members = rows.map<Map<String, dynamic>>((row) {
+        final userObj = (row as Map<String, dynamic>)['user'] ?? {};
+        return <String, dynamic>{
+          'id': userObj['id']?.toString(),
+          'username': userObj['username'],
+          'email': userObj['email'],
+          'role': row['role'],
+        };
+      }).toList();
+      return members;
+    } catch (e) {
+      // If something unexpected comes back, return an empty list instead of crashing
+      return <Map<String, dynamic>>[];
+    }
+  }
   
   // FIXED: Real-time stream for list members using switchMap.
   Stream<List<Map<String, dynamic>>> getListMembers(int listId) {
