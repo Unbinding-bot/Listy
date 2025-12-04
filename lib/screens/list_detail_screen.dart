@@ -720,5 +720,3 @@ class _ListDetailScreenState extends State<ListDetailScreen> with TickerProvider
     }
   }
 }
-// yk this goes to show how much I like you and how much I want to do fun stuff with you
-// haha lol you probably wont be reading this though
