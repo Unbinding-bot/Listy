@@ -144,9 +144,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   final Widget dragHandle = isReorderable
     ? ReorderableDragStartListener(
       index: index ?? 0,
-      child: const Padding(
-       padding: EdgeInsets.only(right: 8.0),
-       child: Icon(Icons.drag_handle, color: Colors.grey),
+      child: Padding(
+       padding: const EdgeInsets.only(right: 8.0),
+       // Use a theme-safe color for the drag handle
+       child: Icon(Icons.drag_handle, color: Theme.of(context).textTheme.bodyMedium?.color?.withOpacity(0.4)),
       ),
      )
     : const SizedBox.shrink();
@@ -417,25 +418,45 @@ class ListPreviewBlock extends StatelessWidget {
   this.maxHeight = 120.0, // Adjusted default max height
  });
 
- // Helper to convert hex string to Color
- Color _hexToColor(String? hex) {
-  if (hex == null || hex.isEmpty) return Colors.black54; // Use a gray default for preview
+ // 🔑 UPDATED: Helper now accepts BuildContext and uses theme text color as default/fallback.
+ Color _hexToColor(String? hex, BuildContext context) {
+  // Use the theme's default text color (which is light/dark mode sensitive)
+  final defaultColor = Theme.of(context).textTheme.bodyMedium?.color ?? Colors.black; 
+
+  if (hex == null || hex.isEmpty) return defaultColor.withOpacity(0.8);
+  
   var h = hex.replaceFirst('#', '');
   if (h.length == 6) h = 'FF$h';
-  if (h.length != 8) return Colors.black54;
+  
+  if (h.length != 8) {
+   // Return theme color if hex is invalid length
+   return defaultColor.withOpacity(0.8);
+  }
+  
   try {
    return Color(int.parse(h, radix: 16));
   } catch (_) {
-   return Colors.black54;
+   // Return theme color on parsing error
+   return defaultColor.withOpacity(0.8);
   }
  }
 
  @override
  Widget build(BuildContext context) {
+  // 🔑 Get the theme's default text color for non-custom content
+  final defaultTextColor = Theme.of(context).textTheme.bodyMedium?.color ?? Colors.black;
+  // 🔑 Get the Card background color for the ShaderMask fade
+  final cardBackgroundColor = Theme.of(context).cardColor;
+
   if (items.isEmpty) {
-   return const Text(
+   return Text(
     'Empty List',
-    style: TextStyle(fontSize: 14, fontStyle: FontStyle.italic, color: Colors.black45),
+    style: TextStyle(
+     fontSize: 14, 
+     fontStyle: FontStyle.italic, 
+     // Use theme color with slight opacity for "Empty List"
+     color: defaultTextColor.withOpacity(0.45)
+    ),
    );
   }
 
@@ -444,8 +465,14 @@ class ListPreviewBlock extends StatelessWidget {
    final isCompleted = item['is_completed'] as bool? ?? false;
    final isBold = item['is_bold'] as bool? ?? false;
    final isItalic = item['is_italic'] as bool? ?? false;
-   final itemColor = _hexToColor(item['text_color'] as String?);
+   // 🔑 Pass context
+   final itemColor = _hexToColor(item['text_color'] as String?, context); 
    final title = item['title'] as String;
+
+   // Determine the color for incomplete items: either the custom color or the theme default
+   final incompleteColor = itemColor.withOpacity(0.8); 
+   // Determine the color for completed items: a slightly faded version of the incomplete color
+   final completedColor = itemColor.withOpacity(0.5); 
 
    return Row(
     mainAxisSize: MainAxisSize.min, // Keep items together
@@ -457,7 +484,8 @@ class ListPreviewBlock extends StatelessWidget {
       child: Icon(
        isCompleted ? Icons.check_box : Icons.check_box_outline_blank,
        size: 16,
-       color: isCompleted ? itemColor.withOpacity(0.8) : Colors.grey.withOpacity(0.6),
+       // 🔑 Use appropriate color and opacity based on completion state
+       color: isCompleted ? completedColor : incompleteColor.withOpacity(0.7), 
       ),
      ),
      // Text Content (styled)
@@ -469,7 +497,8 @@ class ListPreviewBlock extends StatelessWidget {
         style: TextStyle(
          fontSize: 14,
          decoration: isCompleted ? TextDecoration.lineThrough : null,
-         color: isCompleted ? itemColor.withOpacity(0.6) : itemColor.withOpacity(0.8),
+         // 🔑 Use theme-aware colors
+         color: isCompleted ? completedColor : incompleteColor,
          fontWeight: isBold ? FontWeight.bold : FontWeight.normal,
          fontStyle: isItalic ? FontStyle.italic : FontStyle.normal,
         ),
@@ -487,12 +516,12 @@ class ListPreviewBlock extends StatelessWidget {
    child: ShaderMask(
     // Apply the fade out effect at the bottom
     shaderCallback: (Rect bounds) {
-     return const LinearGradient(
+     return LinearGradient(
       begin: Alignment.topCenter,
       end: Alignment.bottomCenter,
-      // Using the card background color for a seamless fade-out
-      colors: <Color>[Colors.white, Colors.white, Colors.transparent], 
-      stops: [0.0, 0.9, 1.0], // White area from 0% to 90%, then fades to transparent
+      // 🔑 UPDATED: Use the card's background color for a seamless fade-out
+      colors: <Color>[cardBackgroundColor, cardBackgroundColor, Colors.transparent], 
+      stops: const [0.0, 0.9, 1.0], // Card color from 0% to 90%, then fades to transparent
      ).createShader(bounds);
     },
     blendMode: BlendMode.dstIn, // Blends the shader with the content below it
