@@ -708,7 +708,6 @@ class _ListDetailScreenState extends State<ListDetailScreen> with TickerProvider
     child: Column(children: [
      Expanded(
       child: _items.isEmpty ? const Center(child: Text("Start by adding a new item below.")) : ReorderableListView.builder(
-       controller: _scrollController, // Scroll Controller attached here
        padding: const EdgeInsets.only(top: 8.0, bottom: 8.0),
        itemCount: _items.length,
        onReorder: _onReorder,
@@ -748,5 +747,6 @@ class _ListDetailScreenState extends State<ListDetailScreen> with TickerProvider
   }
  }
 }
+
 
 //I like you so much huh?
