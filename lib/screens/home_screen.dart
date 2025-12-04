@@ -66,7 +66,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       
       if (_lists.isNotEmpty) {
         
-        for (int i = 0; i < lists.length; i++) {
+        for (int i = 0; i < _lists.length; i++) {
           _listsAnimatedKey.currentState?.insertItem(i, duration: Duration.zero);
         }
       }
