@@ -1,3 +1,4 @@
+// lib/services/supabase_services.dart
 import 'dart:async';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:rxdart/rxdart.dart'; // REQUIRED: Add this dependency to your pubspec.yaml
