@@ -1,7 +1,7 @@
 // lib/screens/list_screen.dart
 import 'package:flutter/material.dart';
 import '../services/supabase_service.dart';
-
+//
 class SharedListsScreen extends StatelessWidget {
   const SharedListsScreen({super.key});
 

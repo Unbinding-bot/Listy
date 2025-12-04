@@ -6,7 +6,7 @@ import 'package:provider/provider.dart';
 import 'screens/auth_screen.dart';
 import 'screens/home_screen.dart';
 import 'services/theme_service.dart'; // Import the new service
-
+//
 
 ThemeData createDarkTheme(Color primaryColor) {
   return ThemeData(

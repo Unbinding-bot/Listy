@@ -4,7 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:provider/provider.dart';
 import 'auth_screen.dart';
 import '../services/theme_service.dart';
-
+//
 class SettingsScreen extends StatelessWidget {
  const SettingsScreen({super.key});
 

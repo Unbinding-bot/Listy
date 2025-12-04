@@ -6,6 +6,7 @@ class SupabaseService {
   final _client = Supabase.instance.client;
 
   User? get currentUser => _client.auth.currentUser;
+//
 
   // Global helper to get the current user's ID
   String? get currentUserId => currentUser?.id;
